@@ -6,7 +6,9 @@ from typing import Any, Callable, Iterable
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
 
+from mlweave.exceptions import MLWeaveValidationError
 from mlweave.pipeline.core.specs import (
+    ColumnCondition,
     OutputValidationSpec,
     SnapshotField,
     ValidationSpec,
@@ -34,6 +36,8 @@ class MLWeavePipelineStep(TransformerMixin, BaseEstimator):
         description: str | None = None,
         tags: tuple[str, ...] = (),
         stateful: bool = False,
+        condition_column: Any | None = None,
+        column_condition: ColumnCondition = "always",
     ) -> None:
         # Keep sklearn constructor parameters unchanged so clone()/get_params()
         # remain reliable. Derived runtime data is stored only in private attrs.
@@ -47,17 +51,25 @@ class MLWeavePipelineStep(TransformerMixin, BaseEstimator):
         self.description = description
         self.tags = tags
         self.stateful = stateful
+        self.condition_column = condition_column
+        self.column_condition = column_condition
 
         self._snapshot_fields = self._collect_snapshot_fields(output_validators)
 
     def fit(self, X, y=None):
         """Fit the step; stateless steps intentionally learn nothing."""
+        if not self._should_execute(X):
+            return self
+
         self._validate(X, stage="fit")
         self._fit_core(X, y)
         return self
 
     def transform(self, X):
         """Apply the wrapped transform function and output contracts."""
+        if not self._should_execute(X):
+            return X
+
         if self.stateful:
             check_is_fitted(self, "_mlweave_is_fitted_")
 
@@ -82,10 +94,38 @@ class MLWeavePipelineStep(TransformerMixin, BaseEstimator):
                 f"parameters yet: {unexpected}."
             )
 
+        if not self._should_execute(X):
+            return X
+
         self._validate_fit_transform_pre_fit(X)
         self._fit_core(X, y)
         self._validate_transform_only(X)
         return self._transform_core(X)
+
+
+    def _should_execute(self, X) -> bool:
+        """Return whether this step should execute for the current input."""
+        if self.column_condition == "always":
+            return True
+
+        columns = getattr(X, "columns", None)
+        if columns is None:
+            raise MLWeaveValidationError(
+                "Column-conditioned pipeline execution requires an input that "
+                "exposes a 'columns' attribute, such as a pandas DataFrame."
+            )
+
+        column_present = self.condition_column in columns
+
+        if self.column_condition == "present":
+            return column_present
+
+        if self.column_condition == "absent":
+            return not column_present
+
+        raise MLWeaveValidationError(
+            f"Unsupported column condition: {self.column_condition!r}."
+        )
 
     def _fit_core(self, X, y=None) -> None:
         started = perf_counter() if self.tracking else None

@@ -61,7 +61,7 @@ class RepeatablePlots:
         """Register every plot from a reusable recipe."""
         materialized = materialize_recipe(recipe)
         for plot in materialized.plots:
-            self._plots[plot.col_type].append(plot.clone())
+            self._plots[materialized.col_type].append(plot.clone())
         return self
 
     def render(
@@ -88,7 +88,7 @@ class RepeatablePlots:
             raise ValueError(f"Column {col_name!r} does not exist in the DataFrame.")
 
         col_type = self._classify_column(col_name)
-        temporary_plots = self._materialize_temporary(temporary, col_type)
+        temporary_plots = self._materialize_temporary(temporary)
         plots = tuple(self._plots[col_type]) + temporary_plots
         if not plots:
             raise ValueError(f"No plots registered for {col_type.value} columns.")
@@ -170,7 +170,6 @@ class RepeatablePlots:
     @staticmethod
     def _materialize_temporary(
         temporary: AddPlotDecorator | Iterable[AddPlotDecorator] | None,
-        col_type: ColType,
     ) -> tuple[PlotSpec, ...]:
         """Build one-shot plot specs without mutating renderer state."""
         if temporary is None:
@@ -197,9 +196,7 @@ class RepeatablePlots:
                     "temporary entries must come from histogram(), boxplot(), "
                     "scatterplot(), countplot(), or barplot()."
                 )
-            plot = item.build()
-            if plot.col_type == col_type:
-                materialized.append(plot)
+            materialized.append(item.build())
 
         return tuple(materialized)
 
@@ -440,7 +437,7 @@ class RepeatablePlots:
         return id(transform)
 
     def _unique_transformed_name(self, col_name: Any, label: str) -> str:
-        base = f"__mlweave_{col_name}_{label}"
+        base = f"{col_name}_{label}"
         candidate = base
         counter = 1
         while candidate in self._df.columns:

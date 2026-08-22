@@ -6,7 +6,7 @@ from typing import Any, Iterable
 from sklearn.base import BaseEstimator, TransformerMixin, clone
 from sklearn.utils.validation import check_is_fitted
 
-from mlweave.exceptions import MLWeaveConfigurationError
+from mlweave.exceptions import MLWeaveConfigurationError, MLWeaveValidationError
 from mlweave.pipeline.core.specs import (
     OutputValidationSpec,
     SnapshotField,
@@ -39,6 +39,9 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
 
     def fit(self, X, y=None, **fit_params):
         """Validate and fit a fresh clone of the wrapped sklearn transformer."""
+        if not self._should_execute(X):
+            return self
+
         self._validate(X, stage="fit")
         started = perf_counter() if self.spec.tracking else None
 
@@ -56,6 +59,9 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
 
     def transform(self, X):
         """Validate input, delegate transform, then enforce output contracts."""
+        if not self._should_execute(X):
+            return X
+
         check_is_fitted(self, "estimator_")
         self._validate(X, stage="transform")
 
@@ -83,6 +89,9 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
         specific behaviour (for example cross-fitting transformers) instead of
         forcing all sklearn components through a hand-written fit+transform.
         """
+        if not self._should_execute(X):
+            return X
+
         self._validate_fit_transform(X)
         snapshot_fields = self._collect_snapshot_fields(self.spec.output_validators)
         input_snapshot = self._snapshot_input(X, snapshot_fields)
@@ -131,6 +140,32 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
         if input_features is None:
             return method()
         return method(input_features)
+
+
+    def _should_execute(self, X) -> bool:
+        """Return whether the wrapped sklearn step should execute."""
+        condition = self.spec.column_condition
+        if condition == "always":
+            return True
+
+        columns = getattr(X, "columns", None)
+        if columns is None:
+            raise MLWeaveValidationError(
+                "Column-conditioned pipeline execution requires an input that "
+                "exposes a 'columns' attribute, such as a pandas DataFrame."
+            )
+
+        column_present = self.spec.condition_column in columns
+
+        if condition == "present":
+            return column_present
+
+        if condition == "absent":
+            return not column_present
+
+        raise MLWeaveValidationError(
+            f"Unsupported column condition: {condition!r}."
+        )
 
     def _validate(self, X, stage: str) -> None:
         for validation in self.spec.validators:

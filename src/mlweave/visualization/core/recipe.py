@@ -41,9 +41,16 @@ class PlotRecipeBuilder:
                 "Add @plot_recipe."
             )
 
+        if self.spec.col_type is None:
+            raise MLWeaveConfigurationError(
+                f"'{self.spec.recipe_func.__name__}' must declare either "
+                "@numerical or @categorical."
+            )
+
         return PlotRecipe(
             name=self.spec.recipe_func.__name__,
             description=self.spec.recipe_func.__doc__,
+            col_type=self.spec.col_type,
             plots=tuple(plot.clone() for plot in self.spec.plots),
         )
 

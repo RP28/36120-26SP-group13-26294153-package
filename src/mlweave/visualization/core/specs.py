@@ -35,7 +35,6 @@ class PlotSpec:
     """Declarative configuration for one plot in a recipe."""
 
     plot_type: PlotType
-    col_type: ColType
     args: tuple[Any, ...] = ()
     kwargs: dict[str, Any] = field(default_factory=dict)
 
@@ -43,7 +42,6 @@ class PlotSpec:
         """Return an independent lightweight copy of this specification."""
         return PlotSpec(
             plot_type=self.plot_type,
-            col_type=self.col_type,
             args=self.args,
             kwargs=dict(self.kwargs),
         )
@@ -55,6 +53,7 @@ class PlotRecipeSpec:
 
     recipe_func: Callable[..., Any]
     plots: list[PlotSpec] = field(default_factory=list)
+    col_type: ColType | None = None
     finalized: bool = False
 
 
@@ -63,5 +62,6 @@ class PlotRecipe:
     """Reusable, materialized collection of plot specifications."""
 
     name: str
+    col_type: ColType
     plots: tuple[PlotSpec, ...]
     description: str | None = None

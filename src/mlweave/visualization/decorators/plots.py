@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mlweave.visualization.core.specs import ColType, PlotRecipeSpec, PlotSpec, PlotType
+from mlweave.visualization.core.specs import PlotRecipeSpec, PlotSpec, PlotType
 from mlweave.visualization.decorators.base import PlotRecipeConfigurationDecorator
 
 
@@ -16,15 +16,12 @@ class AddPlotDecorator(PlotRecipeConfigurationDecorator):
     def __init__(
         self,
         plot_type: PlotType,
-        col_type: ColType,
         *args: Any,
         **kwargs: Any,
     ) -> None:
         if not isinstance(plot_type, PlotType):
             raise TypeError("plot_type must be a PlotType value.")
-        if not isinstance(col_type, ColType):
-            raise TypeError("col_type must be a ColType value.")
-        self._plot_spec = PlotSpec(plot_type, col_type, tuple(args), dict(kwargs))
+        self._plot_spec = PlotSpec(plot_type, tuple(args), dict(kwargs))
 
     def configure(self, spec: PlotRecipeSpec) -> None:
         # Python applies decorators bottom-up. Inserting at the front makes the
@@ -41,26 +38,26 @@ class AddPlotDecorator(PlotRecipeConfigurationDecorator):
         return self._plot_spec.clone()
 
 
-def histogram(col_type: ColType, *args: Any, **kwargs: Any) -> AddPlotDecorator:
+def histogram(*args: Any, **kwargs: Any) -> AddPlotDecorator:
     """Add a histogram to a plot recipe."""
-    return AddPlotDecorator(PlotType.HISTOGRAM, col_type, *args, **kwargs)
+    return AddPlotDecorator(PlotType.HISTOGRAM, *args, **kwargs)
 
 
-def scatterplot(col_type: ColType, *args: Any, **kwargs: Any) -> AddPlotDecorator:
+def scatterplot(*args: Any, **kwargs: Any) -> AddPlotDecorator:
     """Add a scatter plot to a plot recipe."""
-    return AddPlotDecorator(PlotType.SCATTER, col_type, *args, **kwargs)
+    return AddPlotDecorator(PlotType.SCATTER, *args, **kwargs)
 
 
-def boxplot(col_type: ColType, *args: Any, **kwargs: Any) -> AddPlotDecorator:
+def boxplot(*args: Any, **kwargs: Any) -> AddPlotDecorator:
     """Add a box plot to a plot recipe."""
-    return AddPlotDecorator(PlotType.BOX, col_type, *args, **kwargs)
+    return AddPlotDecorator(PlotType.BOX, *args, **kwargs)
 
 
-def countplot(col_type: ColType = ColType.CATEGORICAL, *args: Any, **kwargs: Any) -> AddPlotDecorator:
+def countplot(*args: Any, **kwargs: Any) -> AddPlotDecorator:
     """Add a count plot to a plot recipe."""
-    return AddPlotDecorator(PlotType.COUNT, col_type, *args, **kwargs)
+    return AddPlotDecorator(PlotType.COUNT, *args, **kwargs)
 
 
-def barplot(col_type: ColType = ColType.CATEGORICAL, *args: Any, **kwargs: Any) -> AddPlotDecorator:
+def barplot(*args: Any, **kwargs: Any) -> AddPlotDecorator:
     """Add a bar plot to a plot recipe."""
-    return AddPlotDecorator(PlotType.BAR, col_type, *args, **kwargs)
+    return AddPlotDecorator(PlotType.BAR, *args, **kwargs)

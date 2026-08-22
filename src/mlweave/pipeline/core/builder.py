@@ -64,6 +64,8 @@ class PipelineStepBuilder:
             description=self.spec.description,
             tags=tuple(sorted(self.spec.tags)),
             stateful=self.spec.mode == "stateful",
+            condition_column=self.spec.condition_column,
+            column_condition=self.spec.column_condition,
         )
 
     def fit(self, func: Callable[..., Any]) -> Callable[..., Any]:

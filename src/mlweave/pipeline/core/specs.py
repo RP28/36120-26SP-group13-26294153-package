@@ -7,6 +7,7 @@ from typing import Any, Callable, FrozenSet, Literal
 PipelineStepMode = Literal["stateless", "stateful"]
 ValidationStage = Literal["fit", "transform", "both"]
 SnapshotField = Literal["row_count", "column_count", "columns"]
+ColumnCondition = Literal["always", "present", "absent"]
 
 
 @dataclass(slots=True, frozen=True)
@@ -48,6 +49,8 @@ class PipelineStepSpec:
     description: str | None = None
     tags: set[str] = field(default_factory=set)
     mode: PipelineStepMode | None = None
+    condition_column: Any | None = None
+    column_condition: ColumnCondition = "always"
 
     @property
     def display_name(self) -> str:
@@ -69,6 +72,8 @@ class WrappedStepSpec:
     tracking: bool = False
     description: str | None = None
     tags: set[str] = field(default_factory=set)
+    condition_column: Any | None = None
+    column_condition: ColumnCondition = "always"
 
     @property
     def display_name(self) -> str:
