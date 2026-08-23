@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from mlweave.exceptions import MLWeaveConfigurationError
 from mlweave.pipeline.core.specs import PipelineStepSpec
+from mlweave.pipeline.core.split import MLWeaveSplitStep
 from mlweave.pipeline.core.step import MLWeavePipelineStep
 
 
@@ -18,30 +19,30 @@ class PendingPipelineStep:
     def __call__(self, *args, **kwargs):
         raise MLWeaveConfigurationError(
             f"'{self.spec.transform_func.__name__}' uses mlweave pipeline "
-            "decorators but is missing @pipeline_step or "
-            "@stateful_pipeline_step. Decorate the function with one of "
-            "those finalizers before using it."
+            "decorators but is missing @pipeline_step, "
+            "@stateful_pipeline_step, or @split_step. Decorate the function "
+            "with the appropriate finalizer before using it."
         )
 
     def __repr__(self) -> str:
         return (
             f"<PendingPipelineStep {self.spec.transform_func.__name__!r}: "
-            "missing @pipeline_step or @stateful_pipeline_step>"
+            "missing pipeline finalizer>"
         )
 
 
 class PipelineStepBuilder:
-    """Lazy factory that creates an sklearn pipeline step only when called."""
+    """Lazy factory that creates an sklearn-compatible component when called."""
 
     def __init__(self, spec: PipelineStepSpec) -> None:
         self.spec = spec
         update_wrapper(self, spec.transform_func)
 
-    def __call__(self, *args: Any, **kwargs: Any) -> MLWeavePipelineStep:
+    def __call__(self, *args: Any, **kwargs: Any):
         if self.spec.mode is None:
             raise MLWeaveConfigurationError(
                 f"'{self.spec.transform_func.__name__}' is not finalized. "
-                "Add @pipeline_step or @stateful_pipeline_step."
+                "Add @pipeline_step, @stateful_pipeline_step, or @split_step."
             )
 
         if self.spec.mode == "stateful" and self.spec.fit_func is None:
@@ -51,9 +52,7 @@ class PipelineStepBuilder:
                 f"Define one with @{self.spec.transform_func.__name__}.fit."
             )
 
-        return MLWeavePipelineStep(
-            transform_func=self.spec.transform_func,
-            fit_func=self.spec.fit_func,
+        common = dict(
             call_args=tuple(args),
             call_kwargs=dict(kwargs),
             validators=tuple(sorted(self.spec.validators, key=lambda item: item.priority)),
@@ -63,9 +62,21 @@ class PipelineStepBuilder:
             tracking=self.spec.tracking,
             description=self.spec.description,
             tags=tuple(sorted(self.spec.tags)),
-            stateful=self.spec.mode == "stateful",
             condition_column=self.spec.condition_column,
             column_condition=self.spec.column_condition,
+        )
+
+        if self.spec.mode == "split":
+            return MLWeaveSplitStep(
+                split_func=self.spec.transform_func,
+                **common,
+            )
+
+        return MLWeavePipelineStep(
+            transform_func=self.spec.transform_func,
+            fit_func=self.spec.fit_func,
+            stateful=self.spec.mode == "stateful",
+            **common,
         )
 
     def fit(self, func: Callable[..., Any]) -> Callable[..., Any]:

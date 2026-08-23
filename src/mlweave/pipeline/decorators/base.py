@@ -108,7 +108,7 @@ class PipelineMetadataDecorator(PipelineConfigurationDecorator):
 class PipelineFinalizingDecorator(BasePipelineDecorator):
     """Base class for decorators that finalize a function pipeline-step mode."""
 
-    mode: Literal["stateless", "stateful"]
+    mode: Literal["stateless", "stateful", "split"]
 
     def __call__(self, obj: Any) -> PipelineStepBuilder:
         spec = self._get_spec(obj)
@@ -116,8 +116,8 @@ class PipelineFinalizingDecorator(BasePipelineDecorator):
         if isinstance(spec, WrappedStepSpec):
             raise MLWeaveConfigurationError(
                 f"'{spec.display_name}' is already an sklearn transformer "
-                "adapted with wrap_step(...). @pipeline_step and "
-                "@stateful_pipeline_step are only for Python functions."
+                "adapted with wrap_step(...). Pipeline finalizer decorators are only "
+                "for Python functions."
             )
 
         if spec.mode is not None and spec.mode != self.mode:

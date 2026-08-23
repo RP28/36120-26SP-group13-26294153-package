@@ -146,11 +146,15 @@ class RepeatablePlots:
                 plot_df = plot_df.sample(n=max_rows, random_state=random_state)
 
             title_suffix = f" ({transform_label})" if transform_label else ""
+            display_col_name = (
+                f"{transform_label}({col_name})" if transform_label else str(col_name)
+            )
             self._render_one(
                 plot=plot,
                 plot_df=plot_df,
                 plot_col_name=plot_col_name,
                 original_col_name=col_name,
+                display_col_name=display_col_name,
                 col_type=col_type,
                 second_col=second_col,
                 title_suffix=title_suffix,
@@ -207,6 +211,7 @@ class RepeatablePlots:
         plot_df: pd.DataFrame,
         plot_col_name: Any,
         original_col_name: Any,
+        display_col_name: str,
         col_type: ColType,
         second_col: Any | None,
         title_suffix: str,
@@ -299,6 +304,9 @@ class RepeatablePlots:
 
             case _:
                 raise ValueError(f"Unsupported PlotType: {plot.plot_type}")
+
+        if col_type == ColType.NUMERICAL:
+            ax.set_xlabel(display_col_name)
 
     def _prepare_plot_data(
         self,

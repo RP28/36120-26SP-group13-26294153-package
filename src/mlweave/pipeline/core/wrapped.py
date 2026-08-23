@@ -7,6 +7,12 @@ from sklearn.base import BaseEstimator, TransformerMixin, clone
 from sklearn.utils.validation import check_is_fitted
 
 from mlweave.exceptions import MLWeaveConfigurationError, MLWeaveValidationError
+from mlweave.pipeline.core.multiplex import (
+    is_multiplexed,
+    partition_mapping,
+    shape_of,
+    validate_multiplex,
+)
 from mlweave.pipeline.core.specs import (
     OutputValidationSpec,
     SnapshotField,
@@ -16,18 +22,27 @@ from mlweave.pipeline.core.specs import (
 
 
 class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
-    """Add mlweave contracts/metadata around an existing sklearn transformer.
+    """Add MLWeave contracts/metadata around an existing sklearn transformer.
 
-    ``estimator`` remains a normal sklearn constructor parameter, so nested
-    parameters remain discoverable as ``estimator__...`` for GridSearchCV and
-    similar tools. The original estimator is cloned during fitting; fitting the
-    wrapper therefore does not mutate the instance supplied to ``wrap_step``.
+    In multiplex mode the wrapped estimator is fitted only on partition zero
+    and that fitted instance transforms every remaining partition.
     """
 
     def __init__(self, estimator: BaseEstimator, spec: WrappedStepSpec) -> None:
-        # Keep constructor arguments unchanged for sklearn.clone().
         self.estimator = estimator
         self.spec = spec
+
+    @property
+    def n_features_in_(self):
+        """Number of input features seen by the fitted wrapped estimator."""
+        check_is_fitted(self, "estimator_")
+        return self.estimator_.n_features_in_
+
+    @property
+    def feature_names_in_(self):
+        """Input feature names exposed by the fitted wrapped estimator."""
+        check_is_fitted(self, "estimator_")
+        return self.estimator_.feature_names_in_
 
     @property
     def description(self) -> str | None:
@@ -38,27 +53,70 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
         return tuple(sorted(self.spec.tags))
 
     def fit(self, X, y=None, **fit_params):
-        """Validate and fit a fresh clone of the wrapped sklearn transformer."""
+        if is_multiplexed(X):
+            y_parts = y if is_multiplexed(y) else None
+            validate_multiplex(X, y_parts, require_multiple=False)
+            count = len(X)
+            train_y = y[0] if y_parts is not None else y
+            return self._fit_single(
+                X[0],
+                train_y,
+                partition_mapping(fit_params, 0, count),
+            )
+        return self._fit_single(X, y, fit_params)
+
+    def transform(self, X, **transform_params):
+        if is_multiplexed(X):
+            validate_multiplex(X, require_multiple=False)
+            count = len(X)
+            return tuple(
+                self._transform_single(
+                    part,
+                    partition_mapping(transform_params, index, count),
+                )
+                for index, part in enumerate(X)
+            )
+        return self._transform_single(X, transform_params)
+
+    def fit_transform(self, X, y=None, **fit_params):
+        if not is_multiplexed(X):
+            return self._fit_transform_single(X, y, fit_params)
+
+        y_parts = y if is_multiplexed(y) else None
+        validate_multiplex(X, y_parts, require_multiple=False)
+        count = len(X)
+        train_y = y[0] if y_parts is not None else y
+        train_result = self._fit_transform_single(
+            X[0],
+            train_y,
+            partition_mapping(fit_params, 0, count),
+        )
+        return (
+            train_result,
+            *(
+                self._transform_single(part, {})
+                for part in X[1:]
+            ),
+        )
+
+    def _fit_single(self, X, y, fit_params: dict[str, Any]):
         if not self._should_execute(X):
             self._print_track_skip("fit", X)
             return self
 
         started = perf_counter() if self.spec.tracking else None
         self._validate(X, stage="fit")
-
         self.estimator_ = clone(self.estimator)
         self.estimator_.fit(X, y, **fit_params)
-
         self._print_track_event(
             stage="fit",
-            input_shape=getattr(X, "shape", None),
+            input_shape=shape_of(X),
             output_shape=None,
             started=started,
         )
         return self
 
-    def transform(self, X):
-        """Validate input, delegate transform, then enforce output contracts."""
+    def _transform_single(self, X, transform_params: dict[str, Any]):
         if not self._should_execute(X):
             self._print_track_skip("transform", X)
             return X
@@ -66,28 +124,20 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
         started = perf_counter() if self.spec.tracking else None
         check_is_fitted(self, "estimator_")
         self._validate(X, stage="transform")
-
         snapshot_fields = self._collect_snapshot_fields(self.spec.output_validators)
         input_snapshot = self._snapshot_input(X, snapshot_fields)
 
-        result = self.estimator_.transform(X)
+        result = self.estimator_.transform(X, **transform_params)
         self._validate_output(input_snapshot, result)
-
         self._print_track_event(
             stage="transform",
-            input_shape=getattr(X, "shape", None),
-            output_shape=getattr(result, "shape", None),
+            input_shape=shape_of(X),
+            output_shape=shape_of(result),
             started=started,
         )
         return result
 
-    def fit_transform(self, X, y=None, **fit_params):
-        """Delegate sklearn's fit_transform while scanning input validators once.
-
-        Using the wrapped estimator's own ``fit_transform`` preserves estimator-
-        specific behaviour (for example cross-fitting transformers) instead of
-        forcing all sklearn components through a hand-written fit+transform.
-        """
+    def _fit_transform_single(self, X, y, fit_params: dict[str, Any]):
         if not self._should_execute(X):
             self._print_track_skip("fit_transform", X)
             return X
@@ -106,17 +156,15 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
             result = self.estimator_.transform(X)
 
         self._validate_output(input_snapshot, result)
-
         self._print_track_event(
             stage="fit_transform",
-            input_shape=getattr(X, "shape", None),
-            output_shape=getattr(result, "shape", None),
+            input_shape=shape_of(X),
+            output_shape=shape_of(result),
             started=started,
         )
         return result
 
-    def inverse_transform(self, X):
-        """Delegate inverse transformation when supported by the estimator."""
+    def inverse_transform(self, X, **params):
         check_is_fitted(self, "estimator_")
         method = getattr(self.estimator_, "inverse_transform", None)
         if not callable(method):
@@ -124,10 +172,16 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
                 f"{self.estimator_.__class__.__name__} does not provide "
                 "inverse_transform()."
             )
-        return method(X)
+        if is_multiplexed(X):
+            validate_multiplex(X, require_multiple=False)
+            count = len(X)
+            return tuple(
+                method(part, **partition_mapping(params, index, count))
+                for index, part in enumerate(X)
+            )
+        return method(X, **params)
 
     def get_feature_names_out(self, input_features=None):
-        """Delegate sklearn feature-name discovery when available."""
         check_is_fitted(self, "estimator_")
         method = getattr(self.estimator_, "get_feature_names_out", None)
         if not callable(method):
@@ -135,9 +189,7 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
                 f"{self.estimator_.__class__.__name__} does not provide "
                 "get_feature_names_out()."
             )
-        if input_features is None:
-            return method()
-        return method(input_features)
+        return method() if input_features is None else method(input_features)
 
     def _print_track_event(
         self,
@@ -152,30 +204,25 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
 
         duration = perf_counter() - started
         name = self.spec.display_name
-
         if output_shape is None:
             print(
                 f"[mlweave.track] {name} | {stage} | "
                 f"input={input_shape} | {duration:.6f}s"
             )
             return
-
         print(
             f"[mlweave.track] {name} | {stage} | "
             f"input={input_shape} -> output={output_shape} | {duration:.6f}s"
         )
 
     def _print_track_skip(self, stage: str, X) -> None:
-        if not self.spec.tracking:
-            return
-
-        print(
-            f"[mlweave.track] {self.spec.display_name} | {stage} | skipped | "
-            f"input={getattr(X, 'shape', None)}"
-        )
+        if self.spec.tracking:
+            print(
+                f"[mlweave.track] {self.spec.display_name} | {stage} | skipped | "
+                f"input={shape_of(X)}"
+            )
 
     def _should_execute(self, X) -> bool:
-        """Return whether the wrapped sklearn step should execute."""
         condition = self.spec.column_condition
         if condition == "always":
             return True
@@ -188,27 +235,18 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
             )
 
         column_present = self.spec.condition_column in columns
-
         if condition == "present":
             return column_present
-
         if condition == "absent":
             return not column_present
-
-        raise MLWeaveValidationError(
-            f"Unsupported column condition: {condition!r}."
-        )
+        raise MLWeaveValidationError(f"Unsupported column condition: {condition!r}.")
 
     def _validate(self, X, stage: str) -> None:
         for validation in self.spec.validators:
-            if validation.stage not in (stage, "both"):
-                continue
-            self._run_validation(validation, X)
+            if validation.stage in (stage, "both"):
+                self._run_validation(validation, X)
 
     def _validate_fit_transform(self, X) -> None:
-        # Every attached input validator that is relevant to either fit or
-        # transform sees the same X. Run each spec once before delegating to the
-        # wrapped estimator's potentially specialised fit_transform().
         for validation in self.spec.validators:
             if validation.stage in ("fit", "transform", "both"):
                 self._run_validation(validation, X)
@@ -236,10 +274,7 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
         return frozenset(fields)
 
     @staticmethod
-    def _snapshot_input(
-        X,
-        fields: frozenset[SnapshotField],
-    ) -> dict[str, Any]:
+    def _snapshot_input(X, fields: frozenset[SnapshotField]) -> dict[str, Any]:
         if not fields:
             return {}
 
@@ -272,26 +307,16 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
 
 
 def wrap_step(estimator: BaseEstimator) -> MLWeaveWrappedStep:
-    """Wrap an existing sklearn transformer so mlweave decorators can configure it.
-
-    Examples
-    --------
-    ``scaler = wrap_step(StandardScaler())``
-    ``scaler = no_missing_input(scaler)``
-    ``scaler = preserve_rows(scaler)``
-    """
+    """Wrap an sklearn transformer so MLWeave decorators can configure it."""
     if not isinstance(estimator, BaseEstimator):
         raise TypeError("wrap_step() expects an sklearn BaseEstimator instance.")
-
     if not callable(getattr(estimator, "fit", None)):
         raise MLWeaveConfigurationError(
             "wrap_step() requires an estimator that provides fit()."
         )
-
     if not callable(getattr(estimator, "transform", None)):
         raise MLWeaveConfigurationError(
-            "wrap_step() currently supports sklearn transformer steps and "
-            "therefore requires transform()."
+            "wrap_step() is for sklearn transformer steps and requires transform()."
         )
 
     return MLWeaveWrappedStep(

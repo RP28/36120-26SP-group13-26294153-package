@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, FrozenSet, Literal
 
 
-PipelineStepMode = Literal["stateless", "stateful"]
+PipelineStepMode = Literal["stateless", "stateful", "split"]
 ValidationStage = Literal["fit", "transform", "both"]
 SnapshotField = Literal["row_count", "column_count", "columns"]
 ColumnCondition = Literal["always", "present", "absent"]
