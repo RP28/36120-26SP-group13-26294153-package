@@ -40,46 +40,45 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
     def fit(self, X, y=None, **fit_params):
         """Validate and fit a fresh clone of the wrapped sklearn transformer."""
         if not self._should_execute(X):
+            self._print_track_skip("fit", X)
             return self
 
-        self._validate(X, stage="fit")
         started = perf_counter() if self.spec.tracking else None
+        self._validate(X, stage="fit")
 
         self.estimator_ = clone(self.estimator)
         self.estimator_.fit(X, y, **fit_params)
 
-        if self.spec.tracking:
-            self._record_event(
-                stage="fit",
-                input_shape=getattr(X, "shape", None),
-                output_shape=None,
-                duration_seconds=perf_counter() - started,
-            )
+        self._print_track_event(
+            stage="fit",
+            input_shape=getattr(X, "shape", None),
+            output_shape=None,
+            started=started,
+        )
         return self
 
     def transform(self, X):
         """Validate input, delegate transform, then enforce output contracts."""
         if not self._should_execute(X):
+            self._print_track_skip("transform", X)
             return X
 
+        started = perf_counter() if self.spec.tracking else None
         check_is_fitted(self, "estimator_")
         self._validate(X, stage="transform")
 
         snapshot_fields = self._collect_snapshot_fields(self.spec.output_validators)
         input_snapshot = self._snapshot_input(X, snapshot_fields)
-        input_shape = getattr(X, "shape", None) if self.spec.tracking else None
-        started = perf_counter() if self.spec.tracking else None
 
         result = self.estimator_.transform(X)
         self._validate_output(input_snapshot, result)
 
-        if self.spec.tracking:
-            self._record_event(
-                stage="transform",
-                input_shape=input_shape,
-                output_shape=getattr(result, "shape", None),
-                duration_seconds=perf_counter() - started,
-            )
+        self._print_track_event(
+            stage="transform",
+            input_shape=getattr(X, "shape", None),
+            output_shape=getattr(result, "shape", None),
+            started=started,
+        )
         return result
 
     def fit_transform(self, X, y=None, **fit_params):
@@ -90,13 +89,13 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
         forcing all sklearn components through a hand-written fit+transform.
         """
         if not self._should_execute(X):
+            self._print_track_skip("fit_transform", X)
             return X
 
+        started = perf_counter() if self.spec.tracking else None
         self._validate_fit_transform(X)
         snapshot_fields = self._collect_snapshot_fields(self.spec.output_validators)
         input_snapshot = self._snapshot_input(X, snapshot_fields)
-        input_shape = getattr(X, "shape", None) if self.spec.tracking else None
-        started = perf_counter() if self.spec.tracking else None
 
         self.estimator_ = clone(self.estimator)
         fit_transform = getattr(self.estimator_, "fit_transform", None)
@@ -108,13 +107,12 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
 
         self._validate_output(input_snapshot, result)
 
-        if self.spec.tracking:
-            self._record_event(
-                stage="fit_transform",
-                input_shape=input_shape,
-                output_shape=getattr(result, "shape", None),
-                duration_seconds=perf_counter() - started,
-            )
+        self._print_track_event(
+            stage="fit_transform",
+            input_shape=getattr(X, "shape", None),
+            output_shape=getattr(result, "shape", None),
+            started=started,
+        )
         return result
 
     def inverse_transform(self, X):
@@ -141,6 +139,40 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
             return method()
         return method(input_features)
 
+    def _print_track_event(
+        self,
+        *,
+        stage: str,
+        input_shape,
+        output_shape,
+        started: float | None,
+    ) -> None:
+        if not self.spec.tracking:
+            return
+
+        duration = perf_counter() - started
+        name = self.spec.display_name
+
+        if output_shape is None:
+            print(
+                f"[mlweave.track] {name} | {stage} | "
+                f"input={input_shape} | {duration:.6f}s"
+            )
+            return
+
+        print(
+            f"[mlweave.track] {name} | {stage} | "
+            f"input={input_shape} -> output={output_shape} | {duration:.6f}s"
+        )
+
+    def _print_track_skip(self, stage: str, X) -> None:
+        if not self.spec.tracking:
+            return
+
+        print(
+            f"[mlweave.track] {self.spec.display_name} | {stage} | skipped | "
+            f"input={getattr(X, 'shape', None)}"
+        )
 
     def _should_execute(self, X) -> bool:
         """Return whether the wrapped sklearn step should execute."""
@@ -237,26 +269,6 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
             snapshot["columns"] = tuple(columns) if columns is not None else None
 
         return snapshot
-
-    def _record_event(
-        self,
-        *,
-        stage: str,
-        input_shape,
-        output_shape,
-        duration_seconds: float,
-    ) -> None:
-        if not hasattr(self, "history_"):
-            self.history_ = []
-
-        self.history_.append(
-            {
-                "stage": stage,
-                "input_shape": input_shape,
-                "output_shape": output_shape,
-                "duration_seconds": duration_seconds,
-            }
-        )
 
 
 def wrap_step(estimator: BaseEstimator) -> MLWeaveWrappedStep:

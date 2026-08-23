@@ -2,7 +2,7 @@ from mlweave.pipeline.decorators.base import PipelineConfigSpec, PipelineConfigu
 
 
 class TrackDecorator(PipelineConfigurationDecorator):
-    """Enable lightweight fit/transform execution history."""
+    """Print lightweight execution information for a pipeline component."""
 
     def configure(self, spec: PipelineConfigSpec) -> None:
         spec.tracking = True

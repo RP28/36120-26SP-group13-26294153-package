@@ -59,22 +59,40 @@ class MLWeavePipelineStep(TransformerMixin, BaseEstimator):
     def fit(self, X, y=None):
         """Fit the step; stateless steps intentionally learn nothing."""
         if not self._should_execute(X):
+            self._print_track_skip("fit", X)
             return self
 
+        started = perf_counter() if self.tracking else None
         self._validate(X, stage="fit")
         self._fit_core(X, y)
+        self._print_track_event(
+            stage="fit",
+            input_shape=getattr(X, "shape", None),
+            output_shape=None,
+            started=started,
+        )
         return self
 
     def transform(self, X):
         """Apply the wrapped transform function and output contracts."""
         if not self._should_execute(X):
+            self._print_track_skip("transform", X)
             return X
+
+        started = perf_counter() if self.tracking else None
 
         if self.stateful:
             check_is_fitted(self, "_mlweave_is_fitted_")
 
         self._validate(X, stage="transform")
-        return self._transform_core(X)
+        result = self._transform_core(X)
+        self._print_track_event(
+            stage="transform",
+            input_shape=getattr(X, "shape", None),
+            output_shape=getattr(result, "shape", None),
+            started=started,
+        )
+        return result
 
     def fit_transform(self, X, y=None, **fit_params):
         """Fit then transform while avoiding duplicate expensive validation.
@@ -95,13 +113,21 @@ class MLWeavePipelineStep(TransformerMixin, BaseEstimator):
             )
 
         if not self._should_execute(X):
+            self._print_track_skip("fit_transform", X)
             return X
 
+        started = perf_counter() if self.tracking else None
         self._validate_fit_transform_pre_fit(X)
         self._fit_core(X, y)
         self._validate_transform_only(X)
-        return self._transform_core(X)
-
+        result = self._transform_core(X)
+        self._print_track_event(
+            stage="fit_transform",
+            input_shape=getattr(X, "shape", None),
+            output_shape=getattr(result, "shape", None),
+            started=started,
+        )
+        return result
 
     def _should_execute(self, X) -> bool:
         """Return whether this step should execute for the current input."""
@@ -128,8 +154,6 @@ class MLWeavePipelineStep(TransformerMixin, BaseEstimator):
         )
 
     def _fit_core(self, X, y=None) -> None:
-        started = perf_counter() if self.tracking else None
-
         if self.stateful:
             state = self.fit_func(
                 X,
@@ -151,18 +175,8 @@ class MLWeavePipelineStep(TransformerMixin, BaseEstimator):
 
             self._mlweave_is_fitted_ = True
 
-        if self.tracking:
-            self._record_event(
-                stage="fit",
-                input_shape=getattr(X, "shape", None),
-                output_shape=None,
-                duration_seconds=perf_counter() - started,
-            )
-
     def _transform_core(self, X):
         input_snapshot = self._snapshot_input(X, self._snapshot_fields)
-        input_shape = getattr(X, "shape", None) if self.tracking else None
-        started = perf_counter() if self.tracking else None
         kwargs = self.call_kwargs if self.call_kwargs is not None else {}
 
         if self.stateful:
@@ -180,16 +194,42 @@ class MLWeavePipelineStep(TransformerMixin, BaseEstimator):
             )
 
         self._validate_output(input_snapshot, result)
-
-        if self.tracking:
-            self._record_event(
-                stage="transform",
-                input_shape=input_shape,
-                output_shape=getattr(result, "shape", None),
-                duration_seconds=perf_counter() - started,
-            )
-
         return result
+
+    def _print_track_event(
+        self,
+        *,
+        stage: str,
+        input_shape,
+        output_shape,
+        started: float | None,
+    ) -> None:
+        if not self.tracking:
+            return
+
+        duration = perf_counter() - started
+        name = self.transform_func.__name__
+
+        if output_shape is None:
+            print(
+                f"[mlweave.track] {name} | {stage} | "
+                f"input={input_shape} | {duration:.6f}s"
+            )
+            return
+
+        print(
+            f"[mlweave.track] {name} | {stage} | "
+            f"input={input_shape} -> output={output_shape} | {duration:.6f}s"
+        )
+
+    def _print_track_skip(self, stage: str, X) -> None:
+        if not self.tracking:
+            return
+
+        print(
+            f"[mlweave.track] {self.transform_func.__name__} | {stage} | "
+            f"skipped | input={getattr(X, 'shape', None)}"
+        )
 
     def _validate(self, X, stage: str) -> None:
         for validation in self.validators:
@@ -269,23 +309,3 @@ class MLWeavePipelineStep(TransformerMixin, BaseEstimator):
             snapshot["columns"] = tuple(columns) if columns is not None else None
 
         return snapshot
-
-    def _record_event(
-        self,
-        *,
-        stage: str,
-        input_shape,
-        output_shape,
-        duration_seconds: float,
-    ) -> None:
-        if not hasattr(self, "history_"):
-            self.history_ = []
-
-        self.history_.append(
-            {
-                "stage": stage,
-                "input_shape": input_shape,
-                "output_shape": output_shape,
-                "duration_seconds": duration_seconds,
-            }
-        )
