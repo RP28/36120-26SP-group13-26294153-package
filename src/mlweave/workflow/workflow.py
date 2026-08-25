@@ -38,6 +38,22 @@ class MLWorkflow:
         self.inference = inference
         self.partition_names = partition_names
 
+    def replacing(
+        self,
+        *,
+        preprocessing=None,
+        model_search=None,
+        inference=None,
+        partition_names=None,
+    ) -> MLWorkflow:
+        """Return a new unfitted workflow with selected configuration replaced."""
+        return MLWorkflow(
+            preprocessing=(self.preprocessing if preprocessing is None else preprocessing),
+            model_search=(self.model_search if model_search is None else model_search),
+            inference=(self.inference if inference is None else inference),
+            partition_names=(self.partition_names if partition_names is None else partition_names)
+        )
+
     def fit(
         self,
         data,
