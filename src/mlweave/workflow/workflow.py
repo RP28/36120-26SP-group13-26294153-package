@@ -13,24 +13,17 @@ from mlweave.workflow.core.inference import MLWeaveInferenceStep
 
 
 class MLWorkflow:
-    """Orchestrate preprocessing, model search/selection, and business inference.
+    """Orchestrate preprocessing, model search/selection, and inference.
 
-    ``preprocessing`` is an MLWeave/sklearn-compatible pipeline that must
-    produce multiplexed partitions during ``fit_transform``. Partition zero is
-    used for search training and partition one is used as the validation fold.
-    Remaining partitions are retained for inference/evaluation context but are
-    never exposed to model search.
+    The first two preprocessing partitions define the search train/validation
+    boundary. The configured sklearn search selects a candidate using its
+    ``refit`` strategy. Selection metrics are retained from ``cv_results_`` and
+    one clean copy of the winning estimator is then fitted on the training
+    partition only for unbiased validation/test evaluation.
 
-    ``model_search`` is an sklearn search object such as ``GridSearchCV`` or
-    ``RandomizedSearchCV``. Its ``cv`` value is replaced at fit time with a
-    ``PredefinedSplit`` built from the preprocessing train/validation boundary.
-    The search must refit a winning estimator, typically with an
-    ``@model_selection`` policy supplied through ``refit=...``.
-
-    ``inference`` is an optional ``@inference_step`` runtime component. It sees
-    a ``WorkflowContext`` containing fitted workflow state, allowing one
-    function to create predictions, plots, reports, files, or other business
-    outputs.
+    An optional ``@inference_step`` receives a ``WorkflowContext`` containing
+    the fitted model, search results, processed partitions, raw source data,
+    selected search metrics, and optional inference data.
     """
 
     def __init__(
@@ -53,7 +46,7 @@ class MLWorkflow:
         preprocessing_params: dict[str, Any] | None = None,
         search_params: dict[str, Any] | None = None,
     ) -> MLWorkflow:
-        """Fit preprocessing and search/refit the selected model."""
+        """Fit preprocessing, run model search, and fit the selected candidate."""
         preprocessing_params = dict(preprocessing_params or {})
         search_params = dict(search_params or {})
 
@@ -85,14 +78,12 @@ class MLWorkflow:
 
         X_search = self._concat_parts(X_parts[0], X_parts[1])
         y_search = self._concat_parts(y_parts[0], y_parts[1])
-
         validation_fold = np.concatenate(
             [
                 np.full(len(X_parts[0]), -1, dtype=int),
                 np.zeros(len(X_parts[1]), dtype=int),
             ]
         )
-        predefined_split = PredefinedSplit(test_fold=validation_fold)
 
         self.model_search_ = clone(self.model_search)
         search_parameters = self.model_search_.get_params(deep=False)
@@ -105,31 +96,41 @@ class MLWorkflow:
 
         if search_parameters.get("refit", True) is False:
             raise MLWeaveConfigurationError(
-                "MLWorkflow requires model_search.refit to produce a final "
-                "estimator. Use refit=True, a metric name, or an "
+                "MLWorkflow requires model_search.refit to select a final "
+                "candidate. Use refit=True, a metric name, or an "
                 "@model_selection(...) policy."
             )
 
-        self.model_search_.set_params(cv=predefined_split)
+        self.model_search_.set_params(
+            cv=PredefinedSplit(test_fold=validation_fold)
+        )
         self.model_search_.fit(X_search, y_search, **search_params)
 
-        if not hasattr(self.model_search_, "best_estimator_"):
+        if not hasattr(self.model_search_, "best_index_"):
             raise MLWeaveValidationError(
-                "The fitted model search did not expose best_estimator_. "
-                "Ensure the configured search refits a selected candidate."
+                "The fitted model search did not expose best_index_. Ensure "
+                "the configured search selects a final candidate."
             )
 
-        self.model_ = self.model_search_.best_estimator_
-        self.inference_ = clone(self.inference) if self.inference is not None else None
+        self.best_index_ = int(self.model_search_.best_index_)
+        self.best_params_ = dict(self.model_search_.best_params_)
+        self.training_metrics_ = self._selected_metrics("mean_train_")
+        self.validation_metrics_ = self._selected_metrics("mean_test_")
+        self.search_model_ = getattr(self.model_search_, "best_estimator_", None)
+        self.model_ = clone(self.model_search_.estimator).set_params(
+            **self.best_params_
+        )
+        self.model_.fit(X_parts[0], y_parts[0])
+
+        self.inference_ = (
+            clone(self.inference)
+            if self.inference is not None
+            else None
+        )
         return self
 
     def infer(self, data=None):
-        """Run the configured business inference stage.
-
-        ``data`` is optional. When supplied, it is transformed with the fitted
-        preprocessing pipeline and exposed as ``context.X_inference`` while the
-        original object is retained as ``context.inference_data``.
-        """
+        """Run the configured inference stage using fitted workflow state."""
         if not hasattr(self, "model_"):
             raise MLWeaveValidationError(
                 "MLWorkflow must be fitted before inference."
@@ -151,8 +152,6 @@ class MLWorkflow:
                     "transform/inference."
                 )
 
-        inference_index = self._resolve_inference_index(data, X_inference)
-
         context = WorkflowContext(
             model=self.model_,
             search=self.model_search_,
@@ -161,9 +160,13 @@ class MLWorkflow:
             X_parts=self.X_parts_,
             y_parts=self.y_parts_,
             partition_names=self.partition_names_,
+            best_index=self.best_index_,
+            best_params=self.best_params_,
+            training_metrics=self.training_metrics_,
+            validation_metrics=self.validation_metrics_,
             inference_data=data,
             X_inference=X_inference,
-            inference_index=inference_index,
+            inference_index=self._resolve_inference_index(data, X_inference),
         )
 
         self.context_ = context
@@ -179,7 +182,7 @@ class MLWorkflow:
         preprocessing_params: dict[str, Any] | None = None,
         search_params: dict[str, Any] | None = None,
     ):
-        """Fit the full workflow and immediately execute inference."""
+        """Fit the complete workflow and immediately execute inference."""
         self.fit(
             data,
             y,
@@ -192,15 +195,30 @@ class MLWorkflow:
 
         return self.infer(inference_data)
 
+    def _selected_metrics(self, prefix: str) -> dict[str, float]:
+        metrics = {}
+        for key, values in self.model_search_.cv_results_.items():
+            if not key.startswith(prefix):
+                continue
+
+            try:
+                metrics[key.removeprefix(prefix)] = float(
+                    values[self.best_index_]
+                )
+            except (TypeError, ValueError):
+                continue
+
+        return metrics
+
     def _resolve_partition_names(self, partition_count: int) -> tuple[str, ...]:
         if len(self.partition_names) == partition_count:
             names = tuple(self.partition_names)
         elif self.partition_names == ("train", "validation", "test"):
-            # Keep convenient conventional names where possible while still
-            # supporting workflows with more or fewer than three partitions.
             defaults = ["train", "validation", "test"]
             names = tuple(
-                defaults[index] if index < len(defaults) else f"partition_{index}"
+                defaults[index]
+                if index < len(defaults)
+                else f"partition_{index}"
                 for index in range(partition_count)
             )
         else:
@@ -223,7 +241,6 @@ class MLWorkflow:
 
         return names
 
-
     @staticmethod
     def _resolve_inference_index(data, X_inference):
         if X_inference is None:
@@ -242,14 +259,13 @@ class MLWorkflow:
     @staticmethod
     def _concat_parts(left, right):
         if isinstance(left, (pd.DataFrame, pd.Series)) and isinstance(
-            right, type(left)
+            right,
+            type(left),
         ):
             return pd.concat([left, right], axis=0)
 
         try:
             return np.concatenate([left, right], axis=0)
-        except Exception as exc:  # pragma: no cover - defensive error context
+        except Exception as exc:  
             raise MLWeaveValidationError(
-                "MLWorkflow could not concatenate train and validation "
-                "partitions for model search."
-            ) from exc
+                "MLWorkflow could not concatenate train and validation partitions for model search.") from exc

@@ -8,13 +8,7 @@ from mlweave.exceptions import MLWeaveValidationError
 
 @dataclass(slots=True)
 class WorkflowContext:
-    """Runtime state exposed to an ``@inference_step`` function.
-
-    The context intentionally keeps both processed model inputs and the raw
-    source frames. This allows business inference to use technical columns that
-    were removed before modelling, such as identifiers used for aggregation.
-    """
-
+    """Runtime state exposed to an ``@inference_step`` function."""
     model: Any
     search: Any
     preprocessing: Any
@@ -22,6 +16,10 @@ class WorkflowContext:
     X_parts: tuple[Any, ...]
     y_parts: tuple[Any, ...]
     partition_names: tuple[str, ...]
+    best_index: int
+    best_params: dict[str, Any]
+    training_metrics: dict[str, float]
+    validation_metrics: dict[str, float]
     inference_data: Any | None = None
     X_inference: Any | None = None
     inference_index: Any | None = None
