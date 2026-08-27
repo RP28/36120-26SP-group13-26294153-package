@@ -39,6 +39,19 @@ pipe = Pipeline([
 pipe.fit(X, y)
 ```
 
+You can also build a pipeline incrementally during notebook exploration:
+
+```python
+data_preprocessing_pipeline = Pipeline([])
+data_preprocessing_pipeline.steps.append(
+    ("split", train_validation_split(validation_fraction=0.25))
+)
+data_preprocessing_pipeline.steps.extend([
+    ("features", select_features(["age", "income"])),
+    ("model", LogisticRegression()),
+])
+```
+
 ## Lazy Initialization
 
 Pipeline, workflow, and plot decorators do not immediately create runtime objects. They collect configuration in a small builder.
@@ -135,13 +148,43 @@ After a split, intermediate transformers fit on partition `0` and transform ever
 Use `wrap_step()` when you want MLWeave decorators on an existing sklearn transformer.
 
 ```python
-from sklearn.preprocessing import StandardScaler
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from mlweave.pipeline.wrapping import wrap_step
-from mlweave.pipeline.decorators.contracts import preserve_rows
-from mlweave.pipeline.decorators.metadata import tag
+from mlweave.pipeline.decorators.contracts import (
+    no_missing_input,
+    no_missing_output,
+    preserve_rows,
+    requires_columns,
+)
+from mlweave.pipeline.decorators.metadata import description, tag
+from mlweave.pipeline.decorators.tracking import track
 
-scaler = preserve_rows(tag("numeric")(wrap_step(StandardScaler())))
+model_matrix = ColumnTransformer(
+    transformers=[
+        ("numeric", StandardScaler(), numeric_features),
+        (
+            "category",
+            OneHotEncoder(handle_unknown="ignore", sparse_output=False),
+            categorical_features,
+        ),
+    ],
+    verbose_feature_names_out=False,
+).set_output(transform="pandas")
+
+model_matrix_step = wrap_step(model_matrix)
+model_matrix_step = requires_columns(
+    numeric_features + categorical_features
+)(model_matrix_step)
+model_matrix_step = no_missing_input(model_matrix_step)
+model_matrix_step = preserve_rows(model_matrix_step)
+model_matrix_step = no_missing_output(model_matrix_step)
+model_matrix_step = description(
+    "Encode categories and scale numeric features."
+)(model_matrix_step)
+model_matrix_step = tag("model_preprocessing")(model_matrix_step)
+model_matrix_step = track(model_matrix_step)
 ```
 
 Finalizer decorators are only for functions. Wrapped sklearn steps are already concrete components.
@@ -157,7 +200,7 @@ pipe.excluding(["features", "scaler"])
 pipe.clear_multiplex_data()
 ```
 
-`describe()` returns step metadata, including descriptions and tags. `exclude_steps()` and `excluding()` return cloned pipelines with selected steps set to `passthrough`.
+`describe()` returns step metadata, including descriptions and tags. `exclude_steps()` and `excluding()` return cloned pipelines with selected steps set to `passthrough`. `clear_multiplex_data()` releases retained partition references after an extended `fit_transform`, which is useful before serializing a fitted workflow or pipeline.
 
 ## Workflow Decorators
 
@@ -191,8 +234,7 @@ workflow = MLWorkflow(
     inference=predict_submission(),
 )
 
-workflow.fit(data, y)
-predictions = workflow.infer(inference_data)
+outputs = workflow.run(data, inference_data=inference_data)
 ```
 
 Workflow decorators:
@@ -202,11 +244,11 @@ Workflow decorators:
 | `@model_selection` | Build an sklearn `refit` policy from a function that returns the selected candidate index. |
 | `@inference_step` | Build a workflow inference step that receives a `WorkflowContext`. |
 
-The workflow expects preprocessing to produce at least train and validation partitions. It uses those first two partitions to build a `PredefinedSplit` for the configured sklearn search.
+The workflow expects preprocessing to produce at least train and validation partitions. It uses those first two partitions to build a `PredefinedSplit` for the configured sklearn search. `run()` fits the workflow and immediately executes the inference step; use `fit()` plus `infer()` when you want those phases separate.
 
 ## Visualization Decorators
 
-Repeatable plot recipes are also lazy. Decorators describe the recipe, and calling the decorated function materializes it.
+Repeatable plot recipes are also lazy. Decorators describe the recipe, and `RepeatablePlots.use(...)` accepts either the lazy builder or a materialized recipe.
 
 ```python
 from mlweave.visualization.repeatable import RepeatablePlots
@@ -228,8 +270,8 @@ def category_summary():
     """Default categorical summary plots."""
 
 plots = RepeatablePlots(df, max_plot_rows=10_000)
-plots.use(numeric_summary())
-plots.use(category_summary())
+plots.use(numeric_summary)
+plots.use(category_summary)
 
 fig = plots.render("age")
 ```
