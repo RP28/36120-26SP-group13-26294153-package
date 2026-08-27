@@ -1,5 +1,4 @@
 from importlib.metadata import PackageNotFoundError, version
-
 from mlweave.mlweave import main
 
 try:

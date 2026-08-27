@@ -1,22 +1,17 @@
 from __future__ import annotations
 
 from typing import Any, Callable
-
 from sklearn.base import BaseEstimator
-
 from mlweave.workflow.core.context import WorkflowContext
-
 
 class MLWeaveInferenceStep(BaseEstimator):
     """Runtime component for a user-defined workflow inference function."""
-
     def __init__(
         self,
         inference_func: Callable[..., Any],
         call_args: tuple[Any, ...] = (),
         call_kwargs: dict[str, Any] | None = None,
     ) -> None:
-        # Keep constructor arguments unchanged so sklearn cloning remains valid.
         self.inference_func = inference_func
         self.call_args = call_args
         self.call_kwargs = call_kwargs
@@ -27,7 +22,6 @@ class MLWeaveInferenceStep(BaseEstimator):
             raise TypeError(
                 "MLWeaveInferenceStep.run() expects a WorkflowContext instance."
             )
-
         return self.inference_func(
             context,
             *self.call_args,

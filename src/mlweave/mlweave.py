@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
 
-
 def main() -> None:
     """Print the installed MLWeave version."""
     try:

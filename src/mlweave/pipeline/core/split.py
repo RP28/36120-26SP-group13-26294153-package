@@ -2,32 +2,15 @@ from __future__ import annotations
 
 from time import perf_counter
 from typing import Any, Callable, Iterable
-
 import numpy as np
 from sklearn.base import BaseEstimator
-
 from mlweave.exceptions import MLWeaveValidationError
 from mlweave.pipeline.core.multiplex import shape_of, validate_multiplex
-from mlweave.pipeline.core.specs import (
-    ColumnCondition,
-    OutputValidationSpec,
-    SnapshotField,
-    ValidationSpec,
-)
-
+from mlweave.pipeline.core.specs import ColumnCondition, OutputValidationSpec, SnapshotField, ValidationSpec
 
 class MLWeaveSplitStep(BaseEstimator):
-    """Fit-time boundary that converts one dataset into ordered partitions.
-
-    A split function must return either ``(X_train, X_eval, ...)`` for an
-    unsupervised workflow or ``((X_train, X_eval, ...), (y_train, y_eval, ...))``
-    for a supervised workflow. Partition zero is always interpreted as training
-    data. ``transform`` is deliberately a pass-through so prediction/inference
-    never re-splits incoming data.
-    """
-
-    def __init__(
-        self,
+    """Fit-time boundary that converts one dataset into ordered partitions."""
+    def __init__(self,
         split_func: Callable[..., Any],
         call_args: tuple[Any, ...] = (),
         call_kwargs: dict[str, Any] | None = None,
@@ -64,7 +47,6 @@ class MLWeaveSplitStep(BaseEstimator):
 
     def fit_transform(self, X, y=None, **fit_params):
         """Split X directly and retain y partitions for direct-step inspection.
-
         MLWeave ``Pipeline`` consumes both X and y partitions. Direct use of a
         split step can only return X because sklearn's transformer contract has
         a single transformed-data return value.
@@ -102,11 +84,9 @@ class MLWeaveSplitStep(BaseEstimator):
         if not self._should_execute(X):
             self._print_track_skip(X)
             return X, y
-
         started = perf_counter() if self.tracking else None
         self._validate(X)
         input_snapshot = self._snapshot_input(X, self._snapshot_fields)
-
         kwargs = dict(self.call_kwargs or {})
         overlap = kwargs.keys() & fit_params.keys()
         if overlap:
@@ -115,28 +95,22 @@ class MLWeaveSplitStep(BaseEstimator):
                 f"parameters: {sorted(overlap)}."
             )
         kwargs.update(fit_params)
-
         output = self.split_func(X, y, *self.call_args, **kwargs)
         X_parts, y_parts = self._normalise_output(output, input_y=y)
         self._capture_feature_names(X, X_parts[0])
-
         for part in X_parts:
             self._validate_output(input_snapshot, part)
-
         self._mlweave_is_fitted_ = True
         self._print_track_event(X, X_parts, y_parts, started)
         return X_parts, y_parts
-
 
     def _capture_feature_names(self, input_X, training_X) -> None:
         input_shape = getattr(input_X, "shape", None)
         if input_shape is not None and len(input_shape) >= 2:
             self.n_features_in_ = int(input_shape[1])
-
         input_columns = getattr(input_X, "columns", None)
         if input_columns is not None:
             self.feature_names_in_ = np.asarray(input_columns, dtype=object)
-
         output_columns = getattr(training_X, "columns", None)
         if output_columns is not None:
             self.feature_names_out_ = np.asarray(output_columns, dtype=object)
@@ -147,7 +121,6 @@ class MLWeaveSplitStep(BaseEstimator):
                 "@split_step functions must return a tuple. The first X "
                 "partition is always treated as training data."
             )
-
         if (
             len(output) == 2
             and isinstance(output[0], tuple)
@@ -157,27 +130,23 @@ class MLWeaveSplitStep(BaseEstimator):
         else:
             X_parts = output
             y_parts = None
-
         if input_y is not None and y_parts is None:
             raise MLWeaveValidationError(
                 "The split function received y but did not return y partitions. "
                 "Return ((X_train, ...), (y_train, ...))."
             )
-
         validate_multiplex(X_parts, y_parts, require_multiple=True)
         return X_parts, y_parts
 
     def _should_execute(self, X) -> bool:
         if self.column_condition == "always":
             return True
-
         columns = getattr(X, "columns", None)
         if columns is None:
             raise MLWeaveValidationError(
                 "Column-conditioned split execution requires an input with a "
                 "'columns' attribute, such as a pandas DataFrame."
             )
-
         present = self.condition_column in columns
         if self.column_condition == "present":
             return present
@@ -232,10 +201,8 @@ class MLWeaveSplitStep(BaseEstimator):
     def _snapshot_input(X, fields: frozenset[SnapshotField]) -> dict[str, Any]:
         if not fields:
             return {}
-
         snapshot: dict[str, Any] = {}
         shape = getattr(X, "shape", None)
-
         if "row_count" in fields:
             if shape is not None and len(shape) >= 1:
                 snapshot["row_count"] = int(shape[0])
@@ -244,7 +211,6 @@ class MLWeaveSplitStep(BaseEstimator):
                     snapshot["row_count"] = len(X)
                 except TypeError:
                     snapshot["row_count"] = None
-
         if "column_count" in fields:
             if shape is not None and len(shape) >= 2:
                 snapshot["column_count"] = int(shape[1])
@@ -253,9 +219,7 @@ class MLWeaveSplitStep(BaseEstimator):
                 snapshot["column_count"] = (
                     len(columns) if columns is not None else None
                 )
-
         if "columns" in fields:
             columns = getattr(X, "columns", None)
             snapshot["columns"] = tuple(columns) if columns is not None else None
-
         return snapshot

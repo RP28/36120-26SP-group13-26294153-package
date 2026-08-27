@@ -4,13 +4,11 @@ import inspect
 from collections.abc import Iterable, Mapping
 from contextlib import nullcontext
 from typing import Any
-
 from sklearn.base import _fit_context, clone
 from sklearn.pipeline import Pipeline as SklearnPipeline
 from sklearn.pipeline import _fit_transform_one
 from sklearn.utils.metaestimators import available_if
 from sklearn.utils.validation import check_memory
-
 from mlweave.exceptions import MLWeaveConfigurationError, MLWeaveValidationError
 from mlweave.pipeline.core.multiplex import (
     is_multiplexed,
@@ -25,41 +23,32 @@ try:
 except ImportError:  # pragma: no cover - compatibility fallback
     _print_elapsed_time = None
 
-
 _HAS_LEGACY_XT = "Xt" in inspect.signature(
     SklearnPipeline.inverse_transform
 ).parameters
 
-
 def _final_estimator_has(attr: str):
     """Mirror sklearn's method-availability contract for final estimators."""
-
     def check(self):
         getattr(self._final_estimator, attr)
         return True
-
     return check
-
 
 class Pipeline(SklearnPipeline):
     """sklearn ``Pipeline`` plus opt-in MLWeave multiplexing.
-
     Ordinary sklearn usage delegates directly to sklearn's implementation.
     Extended multiplex execution is activated only when the pipeline contains
     an ``@split_step`` component or when ``fit`` receives matching X/y tuples.
-
     In multiplex mode, tuple element zero is always training data. Intermediate
     transformers are fit/fit_transformed on partition zero and then transform
     every remaining partition using the same fitted state. The final estimator
     is fit only on partition zero.
     """
-
     @_fit_context(prefer_skip_nested_validation=False)
     def fit(self, X, y=None, **params):
         if not self._needs_multiplex_fit(X, y):
             self._clear_multiplex_state()
             return super().fit(X, y, **params)
-
         self._fit_extended(X, y, params=params, caller="fit")
         return self
 
@@ -69,7 +58,6 @@ class Pipeline(SklearnPipeline):
         if not self._needs_multiplex_fit(X, y):
             self._clear_multiplex_state()
             return super().fit_transform(X, y, **params)
-
         return self._fit_extended(
             X,
             y,
@@ -83,7 +71,6 @@ class Pipeline(SklearnPipeline):
         if not self._needs_multiplex_fit(X, y):
             self._clear_multiplex_state()
             return super().fit_predict(X, y, **params)
-
         return self._fit_extended(
             X,
             y,
@@ -122,12 +109,9 @@ class Pipeline(SklearnPipeline):
     def inverse_transform(self, X=None, *, Xt=None, **params):
         target = X if X is not None else Xt
         if target is None:
-            # Delegate argument validation/deprecation behaviour to sklearn.
             return self._call_super_inverse(X, Xt, params)
-
         if not self._should_map_runtime_tuple(target):
             return self._call_super_inverse(X, Xt, params)
-
         validate_multiplex(target, require_multiple=False)
         count = len(target)
         return tuple(
@@ -148,7 +132,6 @@ class Pipeline(SklearnPipeline):
                 sample_weight=sample_weight,
                 **params,
             )
-
         y_parts = y if is_multiplexed(y) else None
         if y is not None and y_parts is None:
             raise MLWeaveValidationError(
@@ -156,7 +139,6 @@ class Pipeline(SklearnPipeline):
             )
         validate_multiplex(X, y_parts, require_multiple=False)
         count = len(X)
-
         results = []
         for index, X_part in enumerate(X):
             y_part = y[index] if y_parts is not None else y
@@ -180,7 +162,6 @@ class Pipeline(SklearnPipeline):
         """Return a cloned pipeline with selected steps set to ``passthrough``."""
         names = self._normalise_step_names(step_names)
         self._validate_step_names(names)
-
         result = clone(self)
         if names:
             result.set_params(**{name: "passthrough" for name in names})
@@ -205,7 +186,6 @@ class Pipeline(SklearnPipeline):
                     }
                 )
                 continue
-
             description.append(
                 {
                     "index": index,
@@ -228,7 +208,6 @@ class Pipeline(SklearnPipeline):
         self.steps = list(self.steps)
         self._validate_steps()
         self._validate_split_configuration()
-
         if is_multiplexed(X):
             if not is_multiplexed(y):
                 raise MLWeaveValidationError(
@@ -236,26 +215,21 @@ class Pipeline(SklearnPipeline):
                     "Tuple element 0 is training data."
                 )
             validate_multiplex(X, y, require_multiple=False)
-
         routed_params = self._check_method_params(method=caller, props=params)
         memory = check_memory(self.memory)
         fit_transform_cached = memory.cache(_fit_transform_one)
-
         current_X, current_y = X, y
         split_seen = is_multiplexed(current_X)
-
         for step_idx, (name, transformer) in enumerate(self.steps[:-1]):
             if self._is_passthrough(transformer):
                 with self._elapsed_context(step_idx):
                     continue
-
             if isinstance(transformer, MLWeaveSplitStep):
                 if is_multiplexed(current_X):
                     raise MLWeaveConfigurationError(
                         "A @split_step cannot run after data is already "
                         "multiplexed. Only one split boundary is allowed."
                     )
-
                 fitted_splitter = self._clone_for_pipeline(transformer, memory)
                 step_params = self._method_params(
                     routed_params[name],
@@ -270,7 +244,6 @@ class Pipeline(SklearnPipeline):
                 self.steps[step_idx] = (name, fitted_splitter)
                 split_seen = is_multiplexed(current_X)
                 continue
-
             if is_multiplexed(current_X):
                 current_X, fitted = self._fit_transform_multiplex_step(
                     transformer=transformer,
@@ -292,28 +265,23 @@ class Pipeline(SklearnPipeline):
                     fit_transform_cached=fit_transform_cached,
                 )
             self.steps[step_idx] = (name, fitted)
-
         result = self._fit_final_extended(
             current_X,
             current_y,
             routed_params=routed_params,
             caller=caller,
         )
-
         self._mlweave_multiplex_fitted_ = bool(
             split_seen or is_multiplexed(current_X)
         )
         if caller == "fit_transform" and is_multiplexed(result):
-            # The final transformer has produced a newer partition tuple.
             self.multiplex_X_ = result
             self.multiplex_y_ = current_y
         elif is_multiplexed(current_X):
-            # Retain only the latest partition objects; no stage history or copies.
             self.multiplex_X_ = current_X
             self.multiplex_y_ = current_y
         else:
             self.clear_multiplex_data()
-
         return self if caller == "fit" else result
 
     def _fit_transform_single_step(
@@ -354,10 +322,6 @@ class Pipeline(SklearnPipeline):
         count = len(X_parts)
         train_y = y_parts[0] if y_tuple is not None else y_parts
         fitted_input = self._clone_for_pipeline(transformer, memory)
-
-        # Time the whole multiplex step once. sklearn's helper normally owns
-        # the verbose timing for a single dataset, but here evaluation
-        # partitions are transformed after the training fit-transform.
         with self._elapsed_context(step_idx):
             train_X, fitted = fit_transform_cached(
                 fitted_input,
@@ -368,7 +332,6 @@ class Pipeline(SklearnPipeline):
                 message=None,
                 params=self._partition_step_params(step_params, 0, count),
             )
-
             transform_params = self._method_params(step_params, "transform")
             transformed = [train_X]
             append = transformed.append
@@ -389,12 +352,10 @@ class Pipeline(SklearnPipeline):
                     "fit_predict is unavailable when the final estimator is passthrough."
                 )
             return X
-
         if isinstance(final_estimator, MLWeaveSplitStep):
             raise MLWeaveConfigurationError(
                 "@split_step cannot be the final pipeline step."
             )
-
         if is_multiplexed(X):
             y_tuple = y if is_multiplexed(y) else None
             validate_multiplex(X, y_tuple, require_multiple=False)
@@ -404,7 +365,6 @@ class Pipeline(SklearnPipeline):
         else:
             count = 1
             train_X, train_y = X, y
-
         with self._elapsed_context(len(self.steps) - 1):
             if caller == "fit":
                 fit_params = self._method_params(routed_params[final_name], "fit")
@@ -414,7 +374,6 @@ class Pipeline(SklearnPipeline):
                     **partition_mapping(fit_params, 0, count),
                 )
                 return self
-
             if caller == "fit_predict":
                 fit_predict_params = self._method_params(
                     routed_params[final_name],
@@ -425,8 +384,6 @@ class Pipeline(SklearnPipeline):
                     train_y,
                     **partition_mapping(fit_predict_params, 0, count),
                 )
-
-            # fit_transform
             fit_transform_params = self._method_params(
                 routed_params[final_name],
                 "fit_transform",
@@ -453,10 +410,8 @@ class Pipeline(SklearnPipeline):
                     train_X,
                     **partition_mapping(transform_params, 0, count),
                 )
-
         if not is_multiplexed(X):
             return train_result
-
         outputs = [train_result]
         append = outputs.append
         for index in range(1, count):
@@ -479,7 +434,6 @@ class Pipeline(SklearnPipeline):
     ):
         if not self._should_map_runtime_tuple(X):
             return getattr(SklearnPipeline, method_name)(self, X, **params)
-
         validate_multiplex(X, require_multiple=False)
         count = len(X)
         method = getattr(SklearnPipeline, method_name)
@@ -560,7 +514,6 @@ class Pipeline(SklearnPipeline):
             return {}
         items = step_params.items() if isinstance(step_params, Mapping) else []
         if not items:
-            # sklearn's Bunch is Mapping, but keep a defensive fallback.
             names = (
                 "fit",
                 "fit_transform",
@@ -601,7 +554,6 @@ class Pipeline(SklearnPipeline):
             names = tuple(candidate) if isinstance(candidate, Iterable) else (candidate,)
         else:
             names = tuple(step_names)
-
         if any(not isinstance(name, str) or not name for name in names):
             raise TypeError("Pipeline step names must be non-empty strings.")
         return tuple(dict.fromkeys(names))
@@ -614,6 +566,5 @@ class Pipeline(SklearnPipeline):
                 f"Unknown pipeline step name(s): {missing}. "
                 f"Available steps: {[name for name, _ in self.steps]}."
             )
-
 
 __all__ = ["Pipeline"]
