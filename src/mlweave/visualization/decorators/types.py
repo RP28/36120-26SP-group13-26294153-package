@@ -4,10 +4,8 @@ from mlweave.exceptions import MLWeaveConfigurationError
 from mlweave.visualization.core.specs import ColType, PlotRecipeSpec
 from mlweave.visualization.decorators.base import PlotRecipeConfigurationDecorator
 
-
 class RecipeColumnTypeDecorator(PlotRecipeConfigurationDecorator):
     """Base decorator that assigns one column type to a whole plot recipe."""
-
     col_type: ColType
 
     def configure(self, spec: PlotRecipeSpec) -> None:
@@ -18,18 +16,13 @@ class RecipeColumnTypeDecorator(PlotRecipeConfigurationDecorator):
             )
         spec.col_type = self.col_type
 
-
 class NumericalDecorator(RecipeColumnTypeDecorator):
     """Declare that every plot in the recipe targets numerical columns."""
-
     col_type = ColType.NUMERICAL
-
 
 class CategoricalDecorator(RecipeColumnTypeDecorator):
     """Declare that every plot in the recipe targets categorical columns."""
-
     col_type = ColType.CATEGORICAL
-
 
 numerical = NumericalDecorator()
 categorical = CategoricalDecorator()

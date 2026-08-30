@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
-
 from mlweave.exceptions import MLWeaveValidationError
 
-
 @dataclass(slots=True)
+
 class WorkflowContext:
     """Runtime state exposed to an ``@inference_step`` function."""
     model: Any
@@ -33,7 +32,6 @@ class WorkflowContext:
                 f"Unknown workflow partition {name!r}. Available partitions: "
                 f"{self.partition_names}."
             ) from exc
-
         return self.X_parts[index], self.y_parts[index]
 
     @property

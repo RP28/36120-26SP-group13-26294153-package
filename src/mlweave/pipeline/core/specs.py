@@ -3,44 +3,36 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, FrozenSet, Literal
 
-
 PipelineStepMode = Literal["stateless", "stateful", "split"]
 ValidationStage = Literal["fit", "transform", "both"]
 SnapshotField = Literal["row_count", "column_count", "columns"]
 ColumnCondition = Literal["always", "present", "absent"]
 
-
 @dataclass(slots=True, frozen=True)
+
 class ValidationSpec:
     """Configuration for one validator attached to a pipeline component."""
-
     validator: Callable[..., Any]
     args: tuple[Any, ...] = ()
     kwargs: dict[str, Any] = field(default_factory=dict)
     stage: ValidationStage = "both"
     priority: int = 100
 
-
 @dataclass(slots=True, frozen=True)
+
 class OutputValidationSpec:
-    """Configuration for one validator that runs after transformation.
-
-    ``snapshot_fields`` declares exactly which pieces of input structure must
-    be captured before transformation. This keeps cheap output contracts cheap:
-    for example, ``@no_missing_output`` does not need any input snapshot.
-    """
-
+    """Configuration for one validator that runs after transformation."""
     validator: Callable[..., Any]
     args: tuple[Any, ...] = ()
     kwargs: dict[str, Any] = field(default_factory=dict)
     priority: int = 100
+    # declares pieces of input must be captured before transformation
     snapshot_fields: FrozenSet[SnapshotField] = frozenset()
 
-
 @dataclass(slots=True)
+
 class PipelineStepSpec:
     """Lightweight declarative configuration built for function pipeline steps."""
-
     transform_func: Callable[..., Any]
     fit_func: Callable[..., Any] | None = None
     validators: list[ValidationSpec] = field(default_factory=list)
@@ -56,16 +48,13 @@ class PipelineStepSpec:
     def display_name(self) -> str:
         return self.transform_func.__name__
 
-
 @dataclass(slots=True)
+
 class WrappedStepSpec:
     """Configuration attached to an existing sklearn transformer wrapper.
-
-    The sklearn estimator itself intentionally lives on ``MLWeaveWrappedStep``
-    rather than in this spec so sklearn can expose/tune nested parameters as
-    ``estimator__<parameter>``.
+    The sklearn estimator itself intentionally lives on MLWeaveWrappedStep rather than in this spec so sklearn can
+    expose/tune nested parameters as estimator__<parameter>.
     """
-
     component_name: str
     validators: list[ValidationSpec] = field(default_factory=list)
     output_validators: list[OutputValidationSpec] = field(default_factory=list)

@@ -2,10 +2,8 @@ from __future__ import annotations
 
 from time import perf_counter
 from typing import Any, Iterable
-
 from sklearn.base import BaseEstimator, TransformerMixin, clone
 from sklearn.utils.validation import check_is_fitted
-
 from mlweave.exceptions import MLWeaveConfigurationError, MLWeaveValidationError
 from mlweave.pipeline.core.multiplex import (
     is_multiplexed,
@@ -20,14 +18,11 @@ from mlweave.pipeline.core.specs import (
     WrappedStepSpec,
 )
 
-
 class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
     """Add MLWeave contracts/metadata around an existing sklearn transformer.
-
     In multiplex mode the wrapped estimator is fitted only on partition zero
     and that fitted instance transforms every remaining partition.
     """
-
     def __init__(self, estimator: BaseEstimator, spec: WrappedStepSpec) -> None:
         self.estimator = estimator
         self.spec = spec
@@ -81,7 +76,6 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
     def fit_transform(self, X, y=None, **fit_params):
         if not is_multiplexed(X):
             return self._fit_transform_single(X, y, fit_params)
-
         y_parts = y if is_multiplexed(y) else None
         validate_multiplex(X, y_parts, require_multiple=False)
         count = len(X)
@@ -103,7 +97,6 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
         if not self._should_execute(X):
             self._print_track_skip("fit", X)
             return self
-
         started = perf_counter() if self.spec.tracking else None
         self._validate(X, stage="fit")
         self.estimator_ = clone(self.estimator)
@@ -120,13 +113,11 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
         if not self._should_execute(X):
             self._print_track_skip("transform", X)
             return X
-
         started = perf_counter() if self.spec.tracking else None
         check_is_fitted(self, "estimator_")
         self._validate(X, stage="transform")
         snapshot_fields = self._collect_snapshot_fields(self.spec.output_validators)
         input_snapshot = self._snapshot_input(X, snapshot_fields)
-
         result = self.estimator_.transform(X, **transform_params)
         self._validate_output(input_snapshot, result)
         self._print_track_event(
@@ -141,12 +132,10 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
         if not self._should_execute(X):
             self._print_track_skip("fit_transform", X)
             return X
-
         started = perf_counter() if self.spec.tracking else None
         self._validate_fit_transform(X)
         snapshot_fields = self._collect_snapshot_fields(self.spec.output_validators)
         input_snapshot = self._snapshot_input(X, snapshot_fields)
-
         self.estimator_ = clone(self.estimator)
         fit_transform = getattr(self.estimator_, "fit_transform", None)
         if callable(fit_transform):
@@ -154,7 +143,6 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
         else:
             self.estimator_.fit(X, y, **fit_params)
             result = self.estimator_.transform(X)
-
         self._validate_output(input_snapshot, result)
         self._print_track_event(
             stage="fit_transform",
@@ -201,7 +189,6 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
     ) -> None:
         if not self.spec.tracking:
             return
-
         duration = perf_counter() - started
         name = self.spec.display_name
         if output_shape is None:
@@ -226,14 +213,12 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
         condition = self.spec.column_condition
         if condition == "always":
             return True
-
         columns = getattr(X, "columns", None)
         if columns is None:
             raise MLWeaveValidationError(
                 "Column-conditioned pipeline execution requires an input that "
                 "exposes a 'columns' attribute, such as a pandas DataFrame."
             )
-
         column_present = self.spec.condition_column in columns
         if condition == "present":
             return column_present
@@ -277,10 +262,8 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
     def _snapshot_input(X, fields: frozenset[SnapshotField]) -> dict[str, Any]:
         if not fields:
             return {}
-
         snapshot: dict[str, Any] = {}
         shape = getattr(X, "shape", None)
-
         if "row_count" in fields:
             if shape is not None and len(shape) >= 1:
                 snapshot["row_count"] = int(shape[0])
@@ -289,7 +272,6 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
                     snapshot["row_count"] = len(X)
                 except TypeError:
                     snapshot["row_count"] = None
-
         if "column_count" in fields:
             if shape is not None and len(shape) >= 2:
                 snapshot["column_count"] = int(shape[1])
@@ -298,13 +280,10 @@ class MLWeaveWrappedStep(TransformerMixin, BaseEstimator):
                 snapshot["column_count"] = (
                     len(columns) if columns is not None else None
                 )
-
         if "columns" in fields:
             columns = getattr(X, "columns", None)
             snapshot["columns"] = tuple(columns) if columns is not None else None
-
         return snapshot
-
 
 def wrap_step(estimator: BaseEstimator) -> MLWeaveWrappedStep:
     """Wrap an sklearn transformer so MLWeave decorators can configure it."""
@@ -318,7 +297,6 @@ def wrap_step(estimator: BaseEstimator) -> MLWeaveWrappedStep:
         raise MLWeaveConfigurationError(
             "wrap_step() is for sklearn transformer steps and requires transform()."
         )
-
     return MLWeaveWrappedStep(
         estimator=estimator,
         spec=WrappedStepSpec(component_name=estimator.__class__.__name__),
