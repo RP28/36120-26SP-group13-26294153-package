@@ -8,6 +8,7 @@ class PlotType(enum.Enum):
     """Built-in plot types supported by :class:`RepeatablePlots`."""
     HISTOGRAM = "histogram"
     SCATTER = "scatter"
+    REG = "reg"
     BOX = "box"
     COUNT = "count"
     BAR = "bar"

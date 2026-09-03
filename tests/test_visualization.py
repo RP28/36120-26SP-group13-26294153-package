@@ -8,7 +8,7 @@ import pytest
 from mlweave.exceptions import MLWeaveConfigurationError
 from mlweave.visualization.core.recipe import PendingPlotRecipe, PlotRecipeBuilder, materialize_recipe
 from mlweave.visualization.core.specs import ColTransform, ColType, PlotRecipe, PlotRecipeSpec, PlotSpec, PlotType
-from mlweave.visualization.decorators.plots import AddPlotDecorator, barplot, boxplot, countplot, histogram, scatterplot
+from mlweave.visualization.decorators.plots import AddPlotDecorator, barplot, boxplot, countplot, histogram, regplot, scatterplot
 from mlweave.visualization.decorators.recipe import plot_recipe
 from mlweave.visualization.decorators.types import categorical, numerical
 from mlweave.visualization.repeatable import RepeatablePlots
@@ -82,13 +82,15 @@ def test_repeatable_plots_render_numeric_and_categorical_recipes():
     @numerical
     @histogram(bins=3)
     @scatterplot("other", hue="group")
+    @regplot("other", ci=None)
     def numeric_recipe():
         pass
 
     numeric_plots = RepeatablePlots(df, max_plot_rows=4).use(numeric_recipe)
     fig = numeric_plots.render("num", transform=ColTransform.LOG1P)
-    assert len(fig.axes) == 2
+    assert len(fig.axes) == 3
     assert "Histogram of num" in fig.axes[0].get_title()
+    assert "Regression Plot of num (log1p) vs other" in fig.axes[2].get_title()
     plt.close(fig)
 
     @plot_recipe
@@ -247,6 +249,24 @@ def test_repeatable_plots_render_errors_for_mismatched_plot_types():
 
     with pytest.raises(ValueError, match="does not exist"):
         RepeatablePlots(df).use(missing_second).render("num")
+
+    @plot_recipe
+    @numerical
+    @regplot()
+    def bad_reg():
+        pass
+
+    with pytest.raises(ValueError, match="second column"):
+        RepeatablePlots(df).use(bad_reg).render("num")
+
+    @plot_recipe
+    @numerical
+    @regplot("missing")
+    def missing_reg_second():
+        pass
+
+    with pytest.raises(ValueError, match="does not exist"):
+        RepeatablePlots(df).use(missing_reg_second).render("num")
 
     @plot_recipe
     @categorical

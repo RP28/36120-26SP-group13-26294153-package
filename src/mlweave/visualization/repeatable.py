@@ -171,7 +171,7 @@ class RepeatablePlots:
             if not isinstance(item, AddPlotDecorator):
                 raise TypeError(
                     "temporary entries must come from histogram(), boxplot(), "
-                    "scatterplot(), countplot(), or barplot()."
+                    "scatterplot(), regplot(), countplot(), or barplot()."
                 )
             materialized.append(item.build())
         return tuple(materialized)
@@ -214,6 +214,21 @@ class RepeatablePlots:
                 )
                 ax.set_title(
                     f"Scatter Plot of {original_col_name}{title_suffix} vs {second_col}"
+                )
+            case PlotType.REG:
+                if second_col is None:
+                    raise ValueError(
+                        "Regression plot requires a second column name as an argument."
+                    )
+                sns.regplot(
+                    data=plot_df,
+                    x=plot_col_name,
+                    y=second_col,
+                    ax=ax,
+                    **plot_kwargs,
+                )
+                ax.set_title(
+                    f"Regression Plot of {original_col_name}{title_suffix} vs {second_col}"
                 )
             case PlotType.BOX:
                 if col_type == ColType.NUMERICAL:
@@ -362,7 +377,7 @@ class RepeatablePlots:
 
     def _second_column(self, plot: PlotSpec, col_type: ColType) -> Any | None:
         needs_second = (
-            plot.plot_type in {PlotType.SCATTER, PlotType.BAR}
+            plot.plot_type in {PlotType.SCATTER, PlotType.REG, PlotType.BAR}
             or (plot.plot_type == PlotType.BOX and col_type == ColType.CATEGORICAL)
         )
         if not needs_second:

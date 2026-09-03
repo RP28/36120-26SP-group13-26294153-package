@@ -38,6 +38,10 @@ def scatterplot(*args: Any, **kwargs: Any) -> AddPlotDecorator:
     """Add a scatter plot to a plot recipe."""
     return AddPlotDecorator(PlotType.SCATTER, *args, **kwargs)
 
+def regplot(*args: Any, **kwargs: Any) -> AddPlotDecorator:
+    """Add a regression plot to a plot recipe."""
+    return AddPlotDecorator(PlotType.REG, *args, **kwargs)
+
 def boxplot(*args: Any, **kwargs: Any) -> AddPlotDecorator:
     """Add a box plot to a plot recipe."""
     return AddPlotDecorator(PlotType.BOX, *args, **kwargs)
