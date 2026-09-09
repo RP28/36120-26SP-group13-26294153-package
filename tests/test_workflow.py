@@ -3,12 +3,14 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
-from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.base import BaseEstimator, ClassifierMixin, TransformerMixin
 from sklearn.model_selection import GridSearchCV
 
 from mlweave.exceptions import MLWeaveConfigurationError, MLWeaveValidationError
 from mlweave.pipeline.decorators.step import pipeline_step, split_step
+from mlweave.pipeline.decorators.tracking import track
 from mlweave.pipeline.pipeline import Pipeline
+from mlweave.pipeline.wrapping import wrap_step
 from mlweave.workflow.core.builder import WorkflowStepBuilder
 from mlweave.workflow.core.context import WorkflowContext
 from mlweave.workflow.core.specs import WorkflowStepSpec
@@ -280,6 +282,45 @@ def test_workflow_run_without_inference_and_helper_branches():
         SearchWithOddMetrics(cv=2),
     ).fit(workflow_frame())
     assert four.partition_names_ == ("train", "validation", "test", "partition_3")
+
+def test_workflow_run_can_disable_tracking(capsys):
+    @track
+    @split_step
+    def tracked_split(frame, y):
+        X = frame[["a"]]
+        target = frame["target"]
+        return (
+            X.iloc[:4],
+            X.iloc[4:5],
+            X.iloc[5:],
+        ), (
+            target.iloc[:4],
+            target.iloc[4:5],
+            target.iloc[5:],
+        )
+
+    class IdentityTransformer(TransformerMixin, BaseEstimator):
+        def fit(self, X, y=None):
+            return self
+
+        def transform(self, X):
+            return X
+
+    preprocessing = Pipeline([
+        ("split", tracked_split()),
+        ("identity", track(wrap_step(IdentityTransformer()))),
+    ])
+    MLWorkflow(preprocessing, SearchWithOddMetrics(cv=2)).run(workflow_frame())
+    assert "[mlweave.track]" in capsys.readouterr().out
+
+    silent = MLWorkflow(preprocessing, SearchWithOddMetrics(cv=2))
+    silent.run(workflow_frame(), track=False)
+    assert capsys.readouterr().out == ""
+    assert preprocessing.named_steps["split"].tracking is True
+    assert preprocessing.named_steps["identity"].spec.tracking is True
+
+    with pytest.raises(TypeError, match="track"):
+        silent.run(workflow_frame(), track="no")
 
 def test_workflow_builder_and_decorator_guards():
     builder = WorkflowStepBuilder(WorkflowStepSpec(lambda results: 0))

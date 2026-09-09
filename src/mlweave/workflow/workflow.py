@@ -6,6 +6,9 @@ import pandas as pd
 from sklearn.base import clone
 from sklearn.model_selection import PredefinedSplit
 from mlweave.exceptions import MLWeaveConfigurationError, MLWeaveValidationError
+from mlweave.pipeline.core.split import MLWeaveSplitStep
+from mlweave.pipeline.core.step import MLWeavePipelineStep
+from mlweave.pipeline.core.wrapped import MLWeaveWrappedStep
 from mlweave.workflow.core.context import WorkflowContext
 from mlweave.workflow.core.inference import MLWeaveInferenceStep
 
@@ -55,11 +58,16 @@ class MLWorkflow:
         *,
         preprocessing_params: dict[str, Any] | None = None,
         search_params: dict[str, Any] | None = None,
+        track: bool = True,
     ) -> MLWorkflow:
         """Fit preprocessing, run model search, and fit the selected candidate."""
+        if not isinstance(track, bool):
+            raise TypeError("track must be a boolean.")
         preprocessing_params = dict(preprocessing_params or {})
         search_params = dict(search_params or {})
         self.preprocessing_ = clone(self.preprocessing)
+        if not track:
+            self._set_tracking(self.preprocessing_, enabled=False)
         X_parts = self.preprocessing_.fit_transform(
             data,
             y,
@@ -175,6 +183,7 @@ class MLWorkflow:
         inference_data=None,
         preprocessing_params: dict[str, Any] | None = None,
         search_params: dict[str, Any] | None = None,
+        track: bool = True,
     ):
         """Fit the complete workflow and immediately execute inference."""
         self.fit(
@@ -182,6 +191,7 @@ class MLWorkflow:
             y,
             preprocessing_params=preprocessing_params,
             search_params=search_params,
+            track=track,
         )
         if self.inference_ is None:
             return self
@@ -239,6 +249,15 @@ class MLWorkflow:
         if raw_index is not None and len(data) == len(X_inference):
             return raw_index
         return None
+
+    @classmethod
+    def _set_tracking(cls, obj, *, enabled: bool) -> None:
+        if isinstance(obj, (MLWeavePipelineStep, MLWeaveSplitStep)):
+            obj.tracking = enabled
+        elif isinstance(obj, MLWeaveWrappedStep):
+            obj.spec.tracking = enabled
+        for _, step in getattr(obj, "steps", ()):
+            cls._set_tracking(step, enabled=enabled)
 
     @staticmethod
     def _concat_parts(left, right):
