@@ -856,6 +856,43 @@ def test_pipeline_extended_fit_predict_score_and_helpers(sample_frame):
     with pytest.raises(TypeError, match="non-empty"):
         pipe.exclude_steps("")
 
+def test_pipeline_can_clone_with_tracking_disabled(sample_frame, capsys):
+    @track
+    @split_step
+    def tracked_split(frame, y):
+        return (
+            frame.iloc[:3],
+            frame.iloc[3:],
+        ), (
+            y.iloc[:3],
+            y.iloc[3:],
+        )
+
+    @track
+    @pipeline_step
+    def tracked_feature(frame):
+        out = frame.copy()
+        out["a"] = out["a"] + 1
+        return out
+
+    pipe = Pipeline([
+        ("split", tracked_split()),
+        ("feature", tracked_feature()),
+        ("wrapped", track(wrap_step(AddOneTransformer()))),
+    ])
+    disabled = pipe.get_tracking_disabled_pipeline()
+
+    assert disabled is not pipe
+    assert disabled.named_steps["split"].tracking is False
+    assert disabled.named_steps["feature"].tracking is False
+    assert disabled.named_steps["wrapped"].spec.tracking is False
+    assert pipe.named_steps["split"].tracking is True
+    assert pipe.named_steps["feature"].tracking is True
+    assert pipe.named_steps["wrapped"].spec.tracking is True
+
+    disabled.fit_transform(sample_frame, sample_frame["target"])
+    assert capsys.readouterr().out == ""
+
 def test_pipeline_sklearn_fallbacks_and_passthrough_paths(sample_frame):
     X = sample_frame[["a", "b"]]
     y = sample_frame["target"]

@@ -17,6 +17,8 @@ from mlweave.pipeline.core.multiplex import (
     validate_multiplex,
 )
 from mlweave.pipeline.core.split import MLWeaveSplitStep
+from mlweave.pipeline.core.step import MLWeavePipelineStep
+from mlweave.pipeline.core.wrapped import MLWeaveWrappedStep
 
 try:
     from sklearn.utils._user_interface import _print_elapsed_time
@@ -170,6 +172,12 @@ class Pipeline(SklearnPipeline):
     def excluding(self, *step_names: str | Iterable[str]) -> Pipeline:
         """Alias for :meth:`exclude_steps`."""
         return self.exclude_steps(*step_names)
+
+    def get_tracking_disabled_pipeline(self) -> Pipeline:
+        """Return a cloned pipeline with MLWeave tracking disabled."""
+        result = clone(self)
+        self._disable_tracking(result)
+        return result
 
     def describe(self) -> list[dict[str, Any]]:
         """Return lightweight information about configured pipeline steps."""
@@ -544,6 +552,15 @@ class Pipeline(SklearnPipeline):
     def _clear_multiplex_state(self) -> None:
         self._mlweave_multiplex_fitted_ = False
         self.clear_multiplex_data()
+
+    @classmethod
+    def _disable_tracking(cls, obj) -> None:
+        if isinstance(obj, (MLWeavePipelineStep, MLWeaveSplitStep)):
+            obj.tracking = False
+        elif isinstance(obj, MLWeaveWrappedStep):
+            obj.spec.tracking = False
+        for _, step in getattr(obj, "steps", ()):
+            cls._disable_tracking(step)
 
     @staticmethod
     def _normalise_step_names(
