@@ -10,6 +10,7 @@ class PlotType(enum.Enum):
     SCATTER = "scatter"
     REG = "reg"
     BOX = "box"
+    VIOLIN = "violin"
     COUNT = "count"
     BAR = "bar"
 

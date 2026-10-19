@@ -278,12 +278,13 @@ Repeatable plot recipes are also lazy. Decorators describe the recipe, and `Repe
 from mlweave.visualization.repeatable import RepeatablePlots
 from mlweave.visualization.decorators.recipe import plot_recipe
 from mlweave.visualization.decorators.types import numerical, categorical
-from mlweave.visualization.decorators.plots import histogram, boxplot, countplot
+from mlweave.visualization.decorators.plots import histogram, boxplot, violinplot, countplot
 
 @plot_recipe
 @numerical
 @histogram(bins=30)
 @boxplot()
+@violinplot(inner="quart", cut=0)
 def numeric_summary():
     """Default numeric summary plots."""
 
@@ -310,6 +311,7 @@ Visualization decorators:
 | `@histogram(*args, **kwargs)` | Add a seaborn histogram plot. |
 | `@scatterplot(second_column, **kwargs)` | Add a scatter plot. |
 | `@boxplot(*args, **kwargs)` | Add a box plot. |
+| `@violinplot(*args, **kwargs)` | Add a violin plot. |
 | `@countplot(*args, **kwargs)` | Add a count plot. |
 | `@barplot(second_column, **kwargs)` | Add a bar plot. |
 
@@ -317,9 +319,11 @@ One-shot plots can be passed to `render()` without registering them:
 
 ```python
 from mlweave.visualization.core.specs import ColTransform
-from mlweave.visualization.decorators.plots import histogram
+from mlweave.visualization.decorators.plots import histogram, violinplot
 
 fig = plots.render("income", temporary=histogram(bins=50, transform=ColTransform.LOG1P))
+fig = plots.render("age", temporary=violinplot(inner="quart", cut=0))
+fig = plots.render("department", temporary=violinplot("salary", top_n=10))
 ```
 
 Use `ColTransform.LOG`, `ColTransform.LOG1P`, `ColTransform.SIGN_LOG1P`, or a callable for numerical transforms.

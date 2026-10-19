@@ -170,7 +170,7 @@ class RepeatablePlots:
         for item in items:
             if not isinstance(item, AddPlotDecorator):
                 raise TypeError(
-                    "temporary entries must come from histogram(), boxplot(), "
+                    "temporary entries must come from histogram(), boxplot(), violinplot(), "
                     "scatterplot(), regplot(), countplot(), or barplot()."
                 )
             materialized.append(item.build())
@@ -230,29 +230,31 @@ class RepeatablePlots:
                 ax.set_title(
                     f"Regression Plot of {original_col_name}{title_suffix} vs {second_col}"
                 )
-            case PlotType.BOX:
+            case PlotType.BOX | PlotType.VIOLIN:
+                plot_func = sns.boxplot if plot.plot_type == PlotType.BOX else sns.violinplot
+                plot_label = "Box Plot" if plot.plot_type == PlotType.BOX else "Violin Plot"
                 if col_type == ColType.NUMERICAL:
-                    sns.boxplot(
+                    plot_func(
                         data=plot_df,
                         x=plot_col_name,
                         ax=ax,
                         *plot.args,
                         **plot_kwargs,
                     )
-                    ax.set_title(f"Box Plot of {original_col_name}{title_suffix}")
+                    ax.set_title(f"{plot_label} of {original_col_name}{title_suffix}")
                 else:
                     if second_col is None:
                         raise ValueError(
-                            "For categorical columns, BOX requires a numerical second column."
+                            f"For categorical columns, {plot.plot_type.name} requires a numerical second column."
                         )
-                    sns.boxplot(
+                    plot_func(
                         data=plot_df,
                         x=plot_col_name,
                         y=second_col,
                         ax=ax,
                         **plot_kwargs,
                     )
-                    ax.set_title(f"Box Plot of {second_col} by {original_col_name}")
+                    ax.set_title(f"{plot_label} of {second_col} by {original_col_name}")
             case PlotType.COUNT:
                 if col_type != ColType.CATEGORICAL:
                     raise ValueError("COUNT plot is intended for categorical columns.")
@@ -378,7 +380,10 @@ class RepeatablePlots:
     def _second_column(self, plot: PlotSpec, col_type: ColType) -> Any | None:
         needs_second = (
             plot.plot_type in {PlotType.SCATTER, PlotType.REG, PlotType.BAR}
-            or (plot.plot_type == PlotType.BOX and col_type == ColType.CATEGORICAL)
+            or (
+                plot.plot_type in {PlotType.BOX, PlotType.VIOLIN}
+                and col_type == ColType.CATEGORICAL
+            )
         )
         if not needs_second:
             return None

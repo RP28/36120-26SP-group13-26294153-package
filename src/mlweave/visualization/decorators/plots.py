@@ -46,6 +46,10 @@ def boxplot(*args: Any, **kwargs: Any) -> AddPlotDecorator:
     """Add a box plot to a plot recipe."""
     return AddPlotDecorator(PlotType.BOX, *args, **kwargs)
 
+def violinplot(*args: Any, **kwargs: Any) -> AddPlotDecorator:
+    """Add a violin plot to a plot recipe."""
+    return AddPlotDecorator(PlotType.VIOLIN, *args, **kwargs)
+
 def countplot(*args: Any, **kwargs: Any) -> AddPlotDecorator:
     """Add a count plot to a plot recipe."""
     return AddPlotDecorator(PlotType.COUNT, *args, **kwargs)

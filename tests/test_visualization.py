@@ -8,7 +8,7 @@ import pytest
 from mlweave.exceptions import MLWeaveConfigurationError
 from mlweave.visualization.core.recipe import PendingPlotRecipe, PlotRecipeBuilder, materialize_recipe
 from mlweave.visualization.core.specs import ColTransform, ColType, PlotRecipe, PlotRecipeSpec, PlotSpec, PlotType
-from mlweave.visualization.decorators.plots import AddPlotDecorator, barplot, boxplot, countplot, histogram, regplot, scatterplot
+from mlweave.visualization.decorators.plots import AddPlotDecorator, barplot, boxplot, countplot, histogram, regplot, scatterplot, violinplot
 from mlweave.visualization.decorators.recipe import plot_recipe
 from mlweave.visualization.decorators.types import categorical, numerical
 from mlweave.visualization.repeatable import RepeatablePlots
@@ -28,6 +28,7 @@ def test_plot_recipe_builders_materialize_in_decorator_order():
     @numerical
     @histogram(bins=5)
     @boxplot()
+    @violinplot(inner="quart", cut=0)
     def numeric_recipe():
         """Numeric docs."""
 
@@ -39,7 +40,8 @@ def test_plot_recipe_builders_materialize_in_decorator_order():
     assert recipe.name == "numeric_recipe"
     assert recipe.description == "Numeric docs."
     assert recipe.col_type == ColType.NUMERICAL
-    assert [plot.plot_type for plot in recipe.plots] == [PlotType.HISTOGRAM, PlotType.BOX]
+    assert [plot.plot_type for plot in recipe.plots] == [PlotType.HISTOGRAM, PlotType.BOX, PlotType.VIOLIN]
+    assert recipe.plots[2].kwargs == {"inner": "quart", "cut": 0}
     assert materialize_recipe(numeric_recipe).plots[0].kwargs["bins"] == 5
     assert materialize_recipe(recipe) is recipe
 
@@ -154,6 +156,77 @@ def test_repeatable_plots_temporary_plots_and_transform_paths():
     fig = RepeatablePlots(df).use(numeric_recipe).render("num", transform=lambda series: series.to_numpy())
     assert "<lambda>(num)" in fig.axes[0].get_xlabel()
     plt.close(fig)
+
+def test_violin_recipe_renders_transformed_sample_with_hue(monkeypatch):
+    import seaborn as sns
+
+    df = plot_frame()
+    original = df.copy(deep=True)
+    violin = sns.violinplot
+    calls = []
+
+    def capture_violin(*args, **kwargs):
+        calls.append(kwargs)
+        return violin(*args, **kwargs)
+
+    monkeypatch.setattr(sns, "violinplot", capture_violin)
+
+    @plot_recipe
+    @numerical
+    @violinplot(inner="quart", cut=0, hue="group", max_rows=4, random_state=7)
+    def numeric_recipe():
+        pass
+
+    fig = RepeatablePlots(df).use(numeric_recipe).render("num", transform=ColTransform.LOG1P)
+    try:
+        assert fig.axes[0].get_title() == "Violin Plot of num (log1p)"
+        assert fig.axes[0].get_xlabel() == "log1p(num)"
+        assert len(fig.axes[0].collections) > 0
+        call = calls[0]
+        sampled = df.sample(n=4, random_state=7)
+        np.testing.assert_allclose(call["data"][call["x"]], np.log1p(sampled["num"]))
+        pd.testing.assert_series_equal(call["data"]["group"], sampled["group"])
+        assert call["inner"] == "quart"
+        assert call["cut"] == 0
+        pd.testing.assert_frame_equal(df, original)
+    finally:
+        plt.close(fig)
+
+def test_temporary_violin_renders_grouped_categories_without_persisting():
+    renderer = RepeatablePlots(plot_frame())
+    fig = renderer.render("cat", temporary=violinplot("other", top_n=1, cut=0))
+    try:
+        assert fig.axes[0].get_title() == "Violin Plot of other by cat"
+        assert fig.axes[0].get_ylabel() == "other"
+        assert [tick.get_text() for tick in fig.axes[0].get_xticklabels()] == ["a"]
+        assert len(fig.axes[0].collections) > 0
+    finally:
+        plt.close(fig)
+
+    fig = renderer.render("num", temporary=violinplot())
+    try:
+        assert fig.axes[0].get_title() == "Violin Plot of num"
+        assert len(fig.axes[0].collections) > 0
+    finally:
+        plt.close(fig)
+
+    for column in ("cat", "num"):
+        with pytest.raises(ValueError, match="No plots registered"):
+            renderer.render(column)
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        ((), "VIOLIN requires a numerical second column"),
+        (("missing",), "does not exist"),
+    ],
+)
+def test_categorical_violin_requires_existing_second_column(args, message):
+    try:
+        with pytest.raises(ValueError, match=message):
+            RepeatablePlots(plot_frame()).render("cat", temporary=violinplot(*args))
+    finally:
+        plt.close("all")
 
 def test_repeatable_plots_validation_errors():
     df = plot_frame()
