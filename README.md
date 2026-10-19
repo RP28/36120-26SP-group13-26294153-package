@@ -10,6 +10,30 @@ It keeps user code as plain Python functions, then materializes those functions 
 pip install mlweave
 ```
 
+Runtime dependencies use version ranges so MLWeave can share an environment
+with your experiment's pinned dependencies:
+
+| Dependency | Version range |
+| --- | --- |
+| matplotlib | `>=3.8,<4` |
+| NumPy | `>=1.26,<3` |
+| pandas | `>=2.2,<3` |
+| scikit-learn | `>=1.6.1,<2` |
+| SciPy | `>=1.12,<2` |
+| seaborn | `>=0.13.2,<0.14` |
+
+Your project can pin exact versions within these ranges. Its dependencies must
+also be compatible with each other. The repository's `uv.lock` records exact
+versions for MLWeave development; it does not pin dependencies in projects that
+install MLWeave. Python 3.12.11 or newer is required.
+
+To test local changes from another uv project before a release is published:
+
+```bash
+uv add --editable /path/to/mlweave
+uv sync
+```
+
 ## Pipeline Quick Start
 
 ```python

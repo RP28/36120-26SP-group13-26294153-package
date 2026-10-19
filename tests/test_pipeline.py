@@ -96,6 +96,7 @@ class RecordingClassifier(ClassifierMixin, BaseEstimator):
 
 class ScoreSamplesEstimator(TransformerMixin, BaseEstimator):
     def fit(self, X, y=None):
+        self.n_features_in_ = X.shape[1]
         return self
 
     def transform(self, X):
