@@ -191,6 +191,13 @@ class Pipeline(SklearnPipeline):
         self._disable_tracking(result)
         return result
 
+    def get_tracking_disabled_pipeline_fitted(self) -> Pipeline:
+        """Return a fitted pipeline copy with MLWeave tracking disabled."""
+        check_is_fitted(self)
+        result = deepcopy(self)
+        self._disable_tracking(result)
+        return result
+
     def describe(self) -> list[dict[str, Any]]:
         """Return lightweight information about configured pipeline steps."""
         description: list[dict[str, Any]] = []
