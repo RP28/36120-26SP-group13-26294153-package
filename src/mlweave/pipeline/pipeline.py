@@ -11,15 +11,12 @@ from sklearn.utils.metaestimators import available_if
 from sklearn.utils.metadata_routing import _raise_for_params, _routing_enabled, process_routing
 from sklearn.utils.validation import check_is_fitted, check_memory
 from mlweave.exceptions import MLWeaveConfigurationError, MLWeaveValidationError
-from mlweave.pipeline.core.multiplex import (
-    is_multiplexed,
-    partition_mapping,
-    shape_of,
-    validate_multiplex,
-)
+from mlweave.pipeline.core.multiplex import is_multiplexed, partition_mapping, shape_of, validate_multiplex
 from mlweave.pipeline.core.split import MLWeaveSplitStep
 from mlweave.pipeline.core.step import MLWeavePipelineStep
 from mlweave.pipeline.core.wrapped import MLWeaveWrappedStep
+from copy import deepcopy
+from sklearn.utils.validation import check_is_fitted
 
 try:
     from sklearn.utils._user_interface import _print_elapsed_time
@@ -173,6 +170,15 @@ class Pipeline(SklearnPipeline):
         result = clone(self)
         if names:
             result.set_params(**{name: "passthrough" for name in names})
+        return result
+
+    def exclude_steps_fitted(self, *step_names):
+        """Return a fitted pipeline copy with selected steps disabled."""
+        check_is_fitted(self)
+        names = self._normalise_step_names(step_names)
+        self._validate_step_names(names)
+        result = deepcopy(self)
+        result.steps = [(name, "passthrough" if name in names else step) for name, step in result.steps]
         return result
 
     def excluding(self, *step_names: str | Iterable[str]) -> Pipeline:
