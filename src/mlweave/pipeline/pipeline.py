@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Iterable, Mapping
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from typing import Any
 from sklearn.base import _fit_context, clone
 from sklearn.pipeline import Pipeline as SklearnPipeline
 from sklearn.pipeline import _fit_transform_one
 from sklearn.utils.metaestimators import available_if
-from sklearn.utils.validation import check_memory
+from sklearn.utils.metadata_routing import _raise_for_params, _routing_enabled, process_routing
+from sklearn.utils.validation import check_is_fitted, check_memory
 from mlweave.exceptions import MLWeaveConfigurationError, MLWeaveValidationError
 from mlweave.pipeline.core.multiplex import (
     is_multiplexed,
@@ -37,8 +38,10 @@ def _final_estimator_has(attr: str):
     return check
 
 class Pipeline(SklearnPipeline):
-    """sklearn ``Pipeline`` plus opt-in MLWeave multiplexing.
+    """sklearn ``Pipeline`` plus inference-only steps and opt-in multiplexing.
     Ordinary sklearn usage delegates directly to sklearn's implementation.
+    ``@inference_step`` transformations are bypassed during all fitting methods
+    and receive only their declared ``@runtime_inputs`` during inference.
     Extended multiplex execution is activated only when the pipeline contains
     an ``@split_step`` component or when ``fit`` receives matching X/y tuples.
     In multiplex mode, tuple element zero is always training data. Intermediate
@@ -50,7 +53,9 @@ class Pipeline(SklearnPipeline):
     def fit(self, X, y=None, **params):
         if not self._needs_multiplex_fit(X, y):
             self._clear_multiplex_state()
-            return super().fit(X, y, **params)
+            with self._skip_inference_steps():
+                super().fit(X, y, **params)
+            return self
         self._fit_extended(X, y, params=params, caller="fit")
         return self
 
@@ -59,7 +64,8 @@ class Pipeline(SklearnPipeline):
     def fit_transform(self, X, y=None, **params):
         if not self._needs_multiplex_fit(X, y):
             self._clear_multiplex_state()
-            return super().fit_transform(X, y, **params)
+            with self._skip_inference_steps():
+                return super().fit_transform(X, y, **params)
         return self._fit_extended(
             X,
             y,
@@ -70,9 +76,11 @@ class Pipeline(SklearnPipeline):
     @available_if(_final_estimator_has("fit_predict"))
     @_fit_context(prefer_skip_nested_validation=False)
     def fit_predict(self, X, y=None, **params):
+        """Return training predictions, bypassing inference-only transformations."""
         if not self._needs_multiplex_fit(X, y):
             self._clear_multiplex_state()
-            return super().fit_predict(X, y, **params)
+            with self._skip_inference_steps():
+                return super().fit_predict(X, y, **params)
         return self._fit_extended(
             X,
             y,
@@ -97,11 +105,8 @@ class Pipeline(SklearnPipeline):
         return self._map_runtime_method("decision_function", X, params)
 
     @available_if(_final_estimator_has("score_samples"))
-    def score_samples(self, X):
-        if not self._should_map_runtime_tuple(X):
-            return super().score_samples(X)
-        validate_multiplex(X, require_multiple=False)
-        return tuple(SklearnPipeline.score_samples(self, part) for part in X)
+    def score_samples(self, X, **params):
+        return self._map_runtime_method("score_samples", X, params)
 
     @available_if(lambda self: self._can_transform())
     def transform(self, X, **params):
@@ -128,11 +133,12 @@ class Pipeline(SklearnPipeline):
     @available_if(_final_estimator_has("score"))
     def score(self, X, y=None, sample_weight=None, **params):
         if not self._should_map_runtime_tuple(X):
-            return super().score(
+            return self._runtime_method_single(
+                "score",
                 X,
-                y,
+                params,
+                y=y,
                 sample_weight=sample_weight,
-                **params,
             )
         y_parts = y if is_multiplexed(y) else None
         if y is not None and y_parts is None:
@@ -150,12 +156,12 @@ class Pipeline(SklearnPipeline):
                 else sample_weight
             )
             results.append(
-                SklearnPipeline.score(
-                    self,
+                self._runtime_method_single(
+                    "score",
                     X_part,
-                    y_part,
+                    partition_mapping(params, index, count),
+                    y=y_part,
                     sample_weight=weight_part,
-                    **partition_mapping(params, index, count),
                 )
             )
         return tuple(results)
@@ -229,7 +235,7 @@ class Pipeline(SklearnPipeline):
         current_X, current_y = X, y
         split_seen = is_multiplexed(current_X)
         for step_idx, (name, transformer) in enumerate(self.steps[:-1]):
-            if self._is_passthrough(transformer):
+            if self._is_passthrough(transformer) or self._is_inference_step(transformer):
                 with self._elapsed_context(step_idx):
                     continue
             if isinstance(transformer, MLWeaveSplitStep):
@@ -354,7 +360,7 @@ class Pipeline(SklearnPipeline):
 
     def _fit_final_extended(self, X, y, *, routed_params, caller: str):
         final_name, final_estimator = self.steps[-1]
-        if self._is_passthrough(final_estimator):
+        if self._is_passthrough(final_estimator) or self._is_inference_step(final_estimator):
             if caller == "fit_predict":
                 raise AttributeError(
                     "fit_predict is unavailable when the final estimator is passthrough."
@@ -441,18 +447,95 @@ class Pipeline(SklearnPipeline):
         params: Mapping[str, Any],
     ):
         if not self._should_map_runtime_tuple(X):
-            return getattr(SklearnPipeline, method_name)(self, X, **params)
+            return self._runtime_method_single(method_name, X, params)
         validate_multiplex(X, require_multiple=False)
         count = len(X)
-        method = getattr(SklearnPipeline, method_name)
         return tuple(
-            method(
-                self,
+            self._runtime_method_single(
+                method_name,
                 part,
-                **partition_mapping(params, index, count),
+                partition_mapping(params, index, count),
             )
             for index, part in enumerate(X)
         )
+
+    def _runtime_method_single(self, method_name, X, params, *, y=None, sample_weight=None):
+        inference_steps = [step for _, step in self.steps if self._is_inference_step(step)]
+        if not inference_steps:
+            method = getattr(SklearnPipeline, method_name)
+            if method_name == "score":
+                return method(self, X, y, sample_weight=sample_weight, **params)
+            return method(self, X, **params)
+        # Validate the live steps list, including inference edits made after fitting.
+        self._validate_steps()
+        check_is_fitted(self)
+        runtime_names = {name for step in inference_steps for name in step.runtime_inputs or ()}
+        runtime_values = {name: value for name, value in params.items() if name in runtime_names}
+        remaining = {name: value for name, value in params.items() if name not in runtime_names}
+        for step in inference_steps:
+            step._runtime_kwargs(runtime_values)
+        if method_name == "transform":
+            _raise_for_params(remaining, self, "transform")
+        if method_name == "score_samples" and remaining:
+            raise TypeError("score_samples() only accepts declared runtime inputs.")
+        routed = None
+        if _routing_enabled() and method_name != "score_samples":
+            routing_params = dict(remaining)
+            if method_name == "score":
+                routing_params["sample_weight"] = sample_weight
+            routed = process_routing(self, method_name, **routing_params)
+        current = X
+        for _, name, step in self._iter(with_final=method_name == "transform"):
+            transform_params = self._method_params(routed[name], "transform") if routed is not None else {}
+            if self._is_inference_step(step):
+                transform_params.update({
+                    name: runtime_values[name]
+                    for name in step.runtime_inputs or () if name in runtime_values
+                })
+            current = step.transform(current, **transform_params)
+        if method_name == "transform":
+            return current
+        final_params = (
+            self._method_params(routed[self.steps[-1][0]], method_name)
+            if routed is not None else remaining
+        )
+        method = getattr(self._final_estimator, method_name)
+        if method_name == "score":
+            if routed is None:
+                final_params = {} if sample_weight is None else {"sample_weight": sample_weight}
+            return method(current, y, **final_params)
+        return method(current, **final_params)
+
+    @staticmethod
+    def _is_inference_step(step) -> bool:
+        return isinstance(step, MLWeavePipelineStep) and step.inference_only
+
+    @contextmanager
+    def _skip_inference_steps(self):
+        """Let sklearn retain its fitting, routing and memory behavior unchanged."""
+        skipped = {
+            index: (name, step) for index, (name, step) in enumerate(self.steps)
+            if self._is_inference_step(step)
+        }
+        if not skipped:
+            yield
+            return
+        self._validate_steps()
+        self.steps = list(self.steps)
+        for index, (name, _) in skipped.items():
+            self.steps[index] = (name, "passthrough")
+        try:
+            yield
+        finally:
+            for index, entry in skipped.items():
+                self.steps[index] = entry
+
+    def __sklearn_is_fitted__(self):
+        # Inference steps have no learned state, including when inserted after fit.
+        if not any(self._is_inference_step(step) for _, step in self.steps):
+            return super().__sklearn_is_fitted__()
+        active = [(name, step) for name, step in self.steps if not self._is_inference_step(step)]
+        return SklearnPipeline(active).__sklearn_is_fitted__()
 
     def _call_super_inverse(self, X, Xt, params):
         if _HAS_LEGACY_XT:

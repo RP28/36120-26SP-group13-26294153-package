@@ -14,9 +14,13 @@ class PendingPipelineStep:
         update_wrapper(self, spec.transform_func)
 
     def __call__(self, *args, **kwargs):
+        if self.spec.runtime_inputs is not None:
+            raise MLWeaveConfigurationError(
+                "@runtime_inputs is only valid with @inference_step; add that finalizer before using it."
+            )
         raise MLWeaveConfigurationError(
             f"'{self.spec.transform_func.__name__}' uses mlweave pipeline decorators but is missing @pipeline_step, "
-            "@stateful_pipeline_step, or @split_step. Decorate the function with the appropriate finalizer before using it.")
+            "@stateful_pipeline_step, @inference_step, or @split_step. Decorate the function with the appropriate finalizer before using it.")
 
     def __repr__(self) -> str:
         return (
@@ -31,7 +35,11 @@ class PipelineStepBuilder:
     def __call__(self, *args: Any, **kwargs: Any):
         if self.spec.mode is None:
             raise MLWeaveConfigurationError(
-                f"'{self.spec.transform_func.__name__}' is not finalized. Add @pipeline_step, @stateful_pipeline_step, or @split_step.")
+                f"'{self.spec.transform_func.__name__}' is not finalized. Add @pipeline_step, @stateful_pipeline_step, @inference_step, or @split_step.")
+        if self.spec.runtime_inputs is not None and self.spec.mode != "inference":
+            raise MLWeaveConfigurationError(
+                "@runtime_inputs is only valid with @inference_step."
+            )
         if self.spec.mode == "stateful" and self.spec.fit_func is None:
             raise MLWeaveConfigurationError(
                 f"'{self.spec.transform_func.__name__}' uses @stateful_pipeline_step but has no fit function. "
@@ -50,7 +58,9 @@ class PipelineStepBuilder:
             return MLWeaveSplitStep(split_func=self.spec.transform_func, **common)
         return MLWeavePipelineStep(
             transform_func=self.spec.transform_func, fit_func=self.spec.fit_func,
-            stateful=self.spec.mode == "stateful", **common)
+            stateful=self.spec.mode == "stateful",
+            inference_only=self.spec.mode == "inference",
+            runtime_inputs=self.spec.runtime_inputs, **common)
 
     def fit(self, func: Callable[..., Any]) -> Callable[..., Any]:
         """Register the fit function for an @stateful_pipeline_step."""

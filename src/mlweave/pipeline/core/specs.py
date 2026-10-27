@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, FrozenSet, Literal
 
-PipelineStepMode = Literal["stateless", "stateful", "split"]
+PipelineStepMode = Literal["stateless", "stateful", "split", "inference"]
 ValidationStage = Literal["fit", "transform", "both"]
 SnapshotField = Literal["row_count", "column_count", "columns"]
 ColumnCondition = Literal["always", "present", "absent"]
@@ -41,6 +41,7 @@ class PipelineStepSpec:
     description: str | None = None
     tags: set[str] = field(default_factory=set)
     mode: PipelineStepMode | None = None
+    runtime_inputs: tuple[str, ...] | None = None
     condition_column: Any | None = None
     column_condition: ColumnCondition = "always"
 

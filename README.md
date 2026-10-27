@@ -115,6 +115,77 @@ step = standardize(["age", "income"])
 
 Returned fit-state keys are stored as learned sklearn attributes. Keys without a trailing underscore are converted to names like `mean_`.
 
+## Inference Steps and Runtime Inputs
+
+Use the pipeline `@inference_step` for stateless transformations that run only
+during inference. MLWeave's `Pipeline` skips these steps during `fit()`,
+`fit_transform()`, and `fit_predict()`, including multiplex training. The first
+positional parameter receives the current pipeline data, whatever you name it.
+
+`@runtime_inputs` declares additional values supplied at prediction time. Inputs
+without defaults are required; inputs with defaults are optional. Both decorator
+orders work. Normal configuration arguments still belong in the builder call.
+
+```python
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+
+from mlweave.pipeline.pipeline import Pipeline
+from mlweave.pipeline.decorators.step import inference_step, runtime_inputs
+
+@inference_step
+def clip_volume(data):
+    data = data.copy()
+    data["volume"] = data["volume"].clip(lower=0)
+    return data
+
+@inference_step
+@runtime_inputs("market_data", "sentiment_data")
+def enrich_features(data, volume_factor=1.0, *, market_data, sentiment_data=None):
+    data = data.copy()
+    data["volume"] = market_data["volume"] * volume_factor
+    if sentiment_data is not None:
+        data["sentiment"] = sentiment_data["score"]
+    return data
+
+X_train = pd.DataFrame({
+    "volume": [10.0, 20.0, 30.0, 40.0],
+    "sentiment": [0.0, 1.0, 0.0, 1.0]
+})
+y_train = [20.0, 41.0, 60.0, 81.0]
+X_test = X_train.iloc[:2].copy()
+market_data = pd.DataFrame({"volume": [12.0, 25.0]}, index=X_test.index)
+sentiment_data = pd.DataFrame({"score": [0.5, -0.5]}, index=X_test.index)
+
+pipe = Pipeline([
+    ("clip", clip_volume()),
+    ("model", LinearRegression())
+])
+pipe.fit(X_train, y_train)  # clip_volume is bypassed
+fitted_model = pipe.named_steps["model"]
+
+# Insert an inference step after fitting, using the existing steps list.
+pipe.steps.insert(-1, ("market", enrich_features(volume_factor=1.0)))
+predictions = pipe.predict(X_test, market_data=market_data)
+predictions_with_sentiment = pipe.predict(
+    X_test, market_data=market_data, sentiment_data=sentiment_data,
+)
+assert pipe.named_steps["model"] is fitted_model  # no refit
+assert predictions.shape == predictions_with_sentiment.shape == (2,)
+```
+
+Only declaring steps receive runtime values; several steps can share a name.
+Other prediction parameters keep their existing estimator or sklearn metadata
+routing behavior. Runtime inputs also work with `predict_proba()`,
+`predict_log_proba()`, `decision_function()`, `transform()`, `score()`, and
+`score_samples()` when the final estimator supports the method.
+`fit_predict()` returns the estimator's training predictions with inference steps
+bypassed and call `predict()` separately for inference transformations.
+
+You can insert, replace, or remove inference steps through `pipe.steps` without
+refitting existing components. Step names and estimator positions must remain
+valid. 
+
 ## Pipeline Decorators
 
 Finalizers:
@@ -124,6 +195,8 @@ Finalizers:
 | `@pipeline_step` | Declare a stateless transform function. |
 | `@stateful_pipeline_step` | Declare a transform function that receives `self` and has a `.fit` function. |
 | `@split_step` | Declare a fit-time split boundary that returns dataset partitions. |
+| `@inference_step` | Declare a stateless transform that runs only during pipeline inference. |
+| `@runtime_inputs(*names)` | Configures additional inference keywords on an `@inference_step`. It is not a finalizer. |
 
 Validation and contracts:
 
@@ -147,7 +220,7 @@ Metadata, tracking, and conditions:
 | `@when_column_present(column)` | Run the component only when a column exists. |
 | `@when_column_absent(column)` | Run the component only when a column is missing. |
 
-Decorator order is flexible for configuration decorators, but every function pipeline step must be finalized with `@pipeline_step`, `@stateful_pipeline_step`, or `@split_step` before use.
+Decorator order is flexible for configuration decorators, but every function pipeline step must be finalized with `@pipeline_step`, `@stateful_pipeline_step`, `@split_step`, or `@inference_step` before use.
 
 ## Multiplexed Splits
 
@@ -267,6 +340,11 @@ Workflow decorators:
 | --- | --- |
 | `@model_selection` | Build an sklearn `refit` policy from a function that returns the selected candidate index. |
 | `@inference_step` | Build a workflow inference step that receives a `WorkflowContext`. |
+
+The workflow decorator comes from `mlweave.workflow.decorators.step`. The
+pipeline decorator with the same name comes from
+`mlweave.pipeline.decorators.step` and receives pipeline data instead of a
+`WorkflowContext`. Use import aliases when combining both in one module.
 
 The workflow expects preprocessing to produce at least train and validation partitions. It uses those first two partitions to build a `PredefinedSplit` for the configured sklearn search. `run()` fits the workflow and immediately executes the inference step; use `fit()` plus `infer()` when you want those phases separate.
 

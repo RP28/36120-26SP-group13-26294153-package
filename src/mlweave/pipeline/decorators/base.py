@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Literal
+from typing import Any
 from sklearn.base import BaseEstimator
 from mlweave.exceptions import MLWeaveConfigurationError
 from mlweave.pipeline.core.builder import PendingPipelineStep, PipelineStepBuilder
 from mlweave.pipeline.core.specs import (
     OutputValidationSpec,
     PipelineStepSpec,
+    PipelineStepMode,
     ValidationSpec,
     WrappedStepSpec,
 )
@@ -84,7 +85,7 @@ class PipelineMetadataDecorator(PipelineConfigurationDecorator):
 
 class PipelineFinalizingDecorator(BasePipelineDecorator):
     """Base class for decorators that finalize a function pipeline-step mode."""
-    mode: Literal["stateless", "stateful", "split"]
+    mode: PipelineStepMode
 
     def __call__(self, obj: Any) -> PipelineStepBuilder:
         spec = self._get_spec(obj)

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import inspect
 from time import perf_counter
 from typing import Any, Callable, Iterable
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
-from mlweave.exceptions import MLWeaveValidationError
+from mlweave.exceptions import MLWeaveConfigurationError, MLWeaveValidationError
 from mlweave.pipeline.core.multiplex import (
     is_multiplexed,
     partition_mapping,
@@ -39,6 +40,8 @@ class MLWeavePipelineStep(TransformerMixin, BaseEstimator):
         stateful: bool = False,
         condition_column: Any | None = None,
         column_condition: ColumnCondition = "always",
+        inference_only: bool = False,
+        runtime_inputs: tuple[str, ...] | None = None,
     ) -> None:
         self.transform_func = transform_func
         self.fit_func = fit_func
@@ -52,7 +55,75 @@ class MLWeavePipelineStep(TransformerMixin, BaseEstimator):
         self.stateful = stateful
         self.condition_column = condition_column
         self.column_condition = column_condition
+        self.inference_only = inference_only
+        self.runtime_inputs = runtime_inputs
+        self._validate_runtime_configuration()
         self._snapshot_fields = self._collect_snapshot_fields(output_validators)
+
+    def _validate_runtime_configuration(self) -> None:
+        if self.runtime_inputs is not None and not self.inference_only:
+            raise MLWeaveConfigurationError(
+                "@runtime_inputs is only valid with @inference_step."
+            )
+        if not self.inference_only:
+            return
+        if self.stateful or self.fit_func is not None:
+            raise MLWeaveConfigurationError("Inference steps must be stateless.")
+        signature = inspect.signature(self.transform_func)
+        parameters = list(signature.parameters.values())
+        if not parameters or parameters[0].kind not in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ):
+            raise MLWeaveConfigurationError(
+                "An inference step must accept pipeline data as its first positional parameter."
+            )
+        names = self.runtime_inputs or ()
+        if any(not isinstance(name, str) or not name for name in names):
+            raise MLWeaveConfigurationError("Runtime input names must be non-empty strings.")
+        if len(set(names)) != len(names):
+            raise MLWeaveConfigurationError("Runtime input names must be unique.")
+        try:
+            bound = signature.bind_partial(None, *self.call_args, **(self.call_kwargs or {}))
+        except TypeError as exc:
+            raise MLWeaveConfigurationError(f"Invalid inference-step configuration: {exc}") from exc
+        for name in names:
+            if name not in signature.parameters:
+                raise MLWeaveConfigurationError(
+                    f"Runtime input {name!r} is missing from the function signature."
+                )
+            if name == parameters[0].name:
+                raise MLWeaveConfigurationError(
+                    "Runtime inputs cannot include the first (pipeline data) parameter."
+                )
+            # These names are already bound by Pipeline's public inference methods.
+            if name in {"self", "X", "y", "sample_weight"}:
+                raise MLWeaveConfigurationError(
+                    f"Runtime input {name!r} conflicts with a public inference parameter."
+                )
+            if signature.parameters[name].kind not in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            ):
+                raise MLWeaveConfigurationError(
+                    f"Runtime input {name!r} must be an explicit keyword-capable parameter."
+                )
+            if name in bound.arguments:
+                raise MLWeaveConfigurationError(
+                    f"Runtime input {name!r} is already bound as a fixed constructor argument."
+                )
+
+    def _runtime_kwargs(self, values: dict[str, Any]) -> dict[str, Any]:
+        parameters = inspect.signature(self.transform_func).parameters
+        missing = [
+            name for name in self.runtime_inputs or ()
+            if name not in values and parameters[name].default is inspect.Parameter.empty
+        ]
+        if missing:
+            raise MLWeaveValidationError(
+                f"Inference step {self.transform_func.__name__!r} requires runtime inputs: {missing}."
+            )
+        return {name: values[name] for name in self.runtime_inputs or () if name in values}
 
     def fit(self, X, y=None, **fit_params):
         """Fit on one dataset, or on partition zero for multiplexed input."""
@@ -65,12 +136,17 @@ class MLWeavePipelineStep(TransformerMixin, BaseEstimator):
             return self._fit_single(X[0], train_y, train_params)
         return self._fit_single(X, y, fit_params)
 
-    def transform(self, X):
+    def transform(self, X, **runtime_values):
         """Transform one dataset or independently transform every partition."""
+        if runtime_values and not self.inference_only:
+            raise TypeError("Ordinary MLWeave steps do not accept runtime transform inputs.")
         if is_multiplexed(X):
             validate_multiplex(X, require_multiple=False)
-            return tuple(self._transform_single(part) for part in X)
-        return self._transform_single(X)
+            return tuple(
+                self._transform_single(part, partition_mapping(runtime_values, index, len(X)))
+                for index, part in enumerate(X)
+            )
+        return self._transform_single(X, runtime_values)
 
     def fit_transform(self, X, y=None, **fit_params):
         """Fit/transform training data and transform all non-training partitions.
@@ -112,7 +188,7 @@ class MLWeavePipelineStep(TransformerMixin, BaseEstimator):
         )
         return self
 
-    def _transform_single(self, X):
+    def _transform_single(self, X, runtime_values=None):
         if not self._should_execute(X):
             self._print_track_skip("transform", X)
             return X
@@ -120,7 +196,8 @@ class MLWeavePipelineStep(TransformerMixin, BaseEstimator):
         if self.stateful:
             check_is_fitted(self, "_mlweave_is_fitted_")
         self._validate(X, stage="transform")
-        result = self._transform_core(X)
+        kwargs = self._runtime_kwargs(runtime_values or {}) if self.inference_only else {}
+        result = self._transform_core(X, kwargs)
         self._capture_output_features(result)
         self._print_track_event(
             stage="transform",
@@ -201,9 +278,10 @@ class MLWeavePipelineStep(TransformerMixin, BaseEstimator):
                 setattr(self, learned_name, value)
         self._mlweave_is_fitted_ = True
 
-    def _transform_core(self, X):
+    def _transform_core(self, X, runtime_kwargs=None):
         input_snapshot = self._snapshot_input(X, self._snapshot_fields)
-        kwargs = self.call_kwargs if self.call_kwargs is not None else {}
+        kwargs = dict(self.call_kwargs or {})
+        kwargs.update(runtime_kwargs or {})
         if self.stateful:
             result = self.transform_func(X, self, *self.call_args, **kwargs)
         else:
